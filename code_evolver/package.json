@@ -1,0 +1,28 @@
+{
+  "name": "code-evolver",
+  "version": "1.0.0",
+  "description": "Track and visualize code evolution through Git history using AST parsing",
+  "main": "Track-CodeEvolution.ps1",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "code-evolution",
+    "git",
+    "ast",
+    "acorn",
+    "diff",
+    "analysis"
+  ],
+  "author": "jacksonhunter",
+  "license": "MIT",
+  "dependencies": {
+    "acorn": "^8.11.2",
+    "acorn-walk": "^8.3.0"
+  },
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jacksonhunter/vibe_tools.git"
+  }
+}
