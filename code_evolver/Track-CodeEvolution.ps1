@@ -31,6 +31,10 @@
 .PARAMETER ExportCompressedDiff
     Export compressed diff showing all changes inline with final version
 
+.PARAMETER Parser
+    Parser file to use for code analysis (default: javascript-parser.js)
+    Must be a .js file in the lib/parsers/ directory
+
 .PARAMETER Verbose
     Show detailed progress messages during execution
 
@@ -42,6 +46,9 @@
 
 .EXAMPLE
     .\Track-CodeEvolution.ps1 -ClassName "MyClass" -ExportUnifiedDiff -ExportCompressedDiff
+
+.EXAMPLE
+    .\Track-CodeEvolution.ps1 -ClassName "MyClass" -Parser "tree-sitter-parser.js" -FilePath "src/my_class.py"
 #>
 
 param(
@@ -49,6 +56,7 @@ param(
     [string]$ClassName,
     [string]$FilePath,
     [string]$OutputDir = "./code-evolution-analysis",
+    [string]$Parser = "javascript-parser.js",  # Parser file to use
     [switch]$ShowDiffs,
     [switch]$ExportHtml,
     [switch]$ExportUnifiedDiff,
@@ -74,12 +82,19 @@ function Test-Prerequisites {
         return $false
     }
     
-    # Check if javascript-parser.js exists
-    $parserPath = Join-Path $PSScriptRoot "lib\parsers\javascript-parser.js"
+    # Check if the specified parser exists
+    $parserPath = Join-Path $PSScriptRoot "lib\parsers\$Parser"
     if (-not (Test-Path $parserPath)) {
-        Write-Error "javascript-parser.js not found in lib/parsers/ directory."
+        Write-Error "Parser '$Parser' not found in lib/parsers/ directory."
+        # List available parsers
+        $availableParsers = Get-ChildItem (Join-Path $PSScriptRoot "lib\parsers") -Filter "*.js" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+        if ($availableParsers) {
+            Write-Host "Available parsers: $($availableParsers -join ', ')" -ForegroundColor Yellow
+        }
         return $false
     }
+
+    Write-Verbose "Using parser: $Parser"
     
     # Check if Acorn dependencies are installed
     $packagePath = Join-Path $PSScriptRoot "package.json"
@@ -230,10 +245,11 @@ function Parse-FileVersions {
     param(
         [array]$FileVersions,
         [string]$BaseClass,
-        [string]$ClassName
+        [string]$ClassName,
+        [string]$Parser = "javascript-parser.js"
     )
-    
-    $parserPath = Join-Path $PSScriptRoot "lib\parsers\javascript-parser.js"
+
+    $parserPath = Join-Path $PSScriptRoot "lib\parsers\$Parser"
     $parsedVersions = @()
     
     foreach ($version in $FileVersions) {
@@ -1560,7 +1576,7 @@ function Main {
         
         # Step 2: Parse with Acorn
         Write-Host "`nStep 2: Parsing with Acorn AST analysis..." -ForegroundColor Yellow
-        $parsedVersions = Parse-FileVersions -FileVersions $fileVersions -BaseClass $BaseClass -ClassName $ClassName
+        $parsedVersions = Parse-FileVersions -FileVersions $fileVersions -BaseClass $BaseClass -ClassName $ClassName -Parser $Parser
         
         Write-Host "Successfully parsed $($parsedVersions.Count) versions" -ForegroundColor Green
         

@@ -8,29 +8,47 @@ A tool for tracking how JavaScript/TypeScript code evolves over time through Git
 
 Originally developed as part of the vibe-reader-extension project, now evolving as an independent tool suite.
 
-## Commands
+## Commit Message Format
 
-```bash
-# Install dependencies (first time setup)
-cd code_evolver
-npm install
+When writing Git commits for this project, use component-specific annotations.
 
-# Track a specific class evolution
-powershell.exe -ExecutionPolicy Bypass -File Track-CodeEvolution.ps1 -ClassName "MyClass" -ExportHtml
+FORMAT:
+<type>(<file/module>): <summary max 50 chars>
 
-# Track classes extending a base class
-powershell.exe -ExecutionPolicy Bypass -File Track-CodeEvolution.ps1 -BaseClass "BaseService" -ShowDiffs
+[ComponentName] ACTION: what changed
+[NextComponent] ACTION: what changed
 
-# Export all formats (HTML, unified diff, compressed diff)
-powershell.exe -ExecutionPolicy Bypass -File Track-CodeEvolution.ps1 -ClassName "MyClass" -ExportHtml -ExportUnifiedDiff -ExportCompressedDiff
+ACTIONS: NEW, MODIFIED, REMOVED, RENAMED, MOVED
+TYPES: feat, fix, refactor, perf, test, docs, style, chore
 
-# Analyze specific file
-powershell.exe -ExecutionPolicy Bypass -File Track-CodeEvolution.ps1 -FilePath "src/UserService.js" -ExportHtml
-```
+GUIDELINES:
+
+List the ACTUAL function/class names that changed.
+
+GOOD EXAMPLE:
+fix(SubscriberMiddleware): Fix async initialization
+
+[initializeSubscriber] MODIFIED: Added await for config load
+[handleRequest] MODIFIED: Check ready state before processing
+[IS_READY] NEW: State flag constant
+
+BAD EXAMPLE:
+fix(SubscriberMiddleware): Fix async initialization
+
+[initialization logic] MODIFIED: Added async handling
+[request handler] MODIFIED: Added state check
+
+For pure CSS/HTML changes, don't force component notation:
+style(evolution-report): Switch to NeonSurge theme
+
+WHY THIS FORMAT:
+
+This allows our evolution tracker to show what actually changed in each function/class, not just repeat the file-level message for every component. When the tracker analyzes commits, it can extract component-specific changes and show meaningful evolution history for each code element.
 
 ## Architecture
 
 ### Core Flow
+
 1. **Track-CodeEvolution.ps1** iterates through Git history for matching files
 2. For each commit, extracts file content at that point in time
 3. Passes content to **javascript-parser.js** for AST analysis using Acorn
@@ -39,12 +57,15 @@ powershell.exe -ExecutionPolicy Bypass -File Track-CodeEvolution.ps1 -FilePath "
 6. Generates reports showing how each function/class changed over time
 
 ### Key Components
+
 - **Track-CodeEvolution.ps1**: PowerShell orchestrator managing Git traversal and report generation
 - **lib/parsers/javascript-parser.js**: Acorn-based AST parser for accurate code extraction (not regex)
 - **Compressed Diff Format**: Reduces 80,000+ lines to ~5,000 by stacking commit transitions at top and showing final code once with inline historical changes
 
 ### Output Formats
+
 Reports saved to `./code-evolution-analysis/`:
+
 - `evolution-report.html` - Interactive HTML with side-by-side diffs (Neon Surge theme)
 - `evolution-unified-diff.txt` - Traditional chronological unified diffs
 - `evolution-compressed-diff.txt` - Optimized format for LLM analysis
@@ -65,6 +86,7 @@ Use component-specific annotations when committing changes:
 **Types**: feat, fix, refactor, perf, test, docs, style, chore
 
 ### Example
+
 ```
 fix(SubscriberMiddleware): Fix async initialization
 
@@ -93,35 +115,42 @@ Git shows file-level diffs which can be overwhelming when tracking specific func
 The Code Evolution Tracker was developed through the following commits in the parent repository:
 
 1. **8b6247e** - Initial implementation
+
    - Created `Track-CodeEvolution-Final.ps1`: PowerShell orchestrator with Git integration
    - Created `acorn-parser.js`: Node.js CLI tool using Acorn AST parser
    - Established core architecture for tracking code evolution
    - Added filtering by class name and inheritance detection
 
 2. **0b96c0c** - Scroll synchronization
+
    - Added synchronized scrolling between diff views in HTML reports
    - Improved side-by-side diff navigation
 
 3. **0d9c1cc** - Enhanced diff UI
+
    - Implemented resizable panels for diff views
    - Improved change visualization with better highlighting
    - Enhanced user interaction in HTML reports
 
 4. **6c20371** - Unified diff export (with JSON escape bug)
+
    - Added unified diff export functionality
    - Implemented modal visualization for diffs
    - Note: Had JSON escaping issues that were fixed in later commits
 
 5. **5b464c0** - Refactoring
+
    - Removed unified diff modal functionality
    - Simplified UI interaction model
 
 6. **c9d7f50** - Unified diff toggle
+
    - Re-implemented unified diff with toggle functionality
    - Integrated HTML content generation
    - Fixed previous JSON escaping issues
 
 7. **1a5240e** - Compressed diff format
+
    - Added revolutionary compressed diff export format
    - Reduces 80,000+ lines to ~5,000 for LLM processing
    - Enhanced UI with better export options
@@ -134,5 +163,6 @@ The Code Evolution Tracker was developed through the following commits in the pa
 ### File Renaming for vibe_tools
 
 When extracted to vibe_tools as an independent project:
+
 - `Track-CodeEvolution-Final.ps1` → `Track-CodeEvolution.ps1`
 - `acorn-parser.js` → `lib/parsers/javascript-parser.js`
