@@ -108,6 +108,31 @@ Git shows file-level diffs which can be overwhelming when tracking specific func
 - Parser architecture supports extension to other languages via `lib/parsers/`
 - Compressed diff innovation: Shows final code once with all historical changes marked inline at their line positions (e.g., "L52: - old code" followed by "L52: + new code")
 
+### Parser Implementation Status
+
+- **JavaScript**: ✅ Full support via web-tree-sitter or Acorn fallback
+- **Python**: ✅ Full support via web-tree-sitter WASM
+- **Bash**: ✅ Full support via web-tree-sitter WASM
+- **PowerShell**: ⚠️ Regex fallback only (tree-sitter grammar has parsing issues)
+  - WASM file built successfully but grammar returns ERROR nodes
+  - Uses regex patterns for function/class/method extraction
+  - Requires upstream grammar fixes for full tree-sitter support
+
+### Building PowerShell WASM (for future reference)
+
+```bash
+# Clone and fix grammar
+git clone https://github.com/PowerShell/tree-sitter-PowerShell
+# Fix _braced_variable regex: /\$\{[^}]+\}/
+# Add _newline rule: $ => /\r?\n/
+
+# Generate parser
+tree-sitter generate
+
+# Build WASM with emscripten
+emcc src/parser.c src/scanner.c -o tree-sitter-powershell.wasm -I./src -Os -fPIC -s WASM=1 -s SIDE_MODULE=2 -s EXPORTED_FUNCTIONS="['_tree_sitter_PowerShell']"
+```
+
 ## Development History
 
 ### Key Evolution from Parent Repository (vibe-reader-extension)

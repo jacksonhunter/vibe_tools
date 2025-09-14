@@ -40,100 +40,6 @@ function detectLanguage(filePath) {
   return languageMap[ext] || 'unknown';
 }
 
-// Fallback to JavaScript parser for JavaScript files
-async function parseWithJavaScriptFallback(code, filePath, extractionContext) {
-  console.error("Falling back to Acorn parser for JavaScript");
-  
-  // Use the existing javascript-parser logic
-  const acorn = require('acorn');
-  const walk = require('acorn-walk');
-  
-  try {
-    const ast = acorn.parse(code, {
-      ecmaVersion: "latest",
-      sourceType: "module", 
-      locations: true,
-      allowReturnOutsideFunction: true,
-      allowImportExportEverywhere: true,
-      allowAwaitOutsideFunction: true,
-      allowSuperOutsideMethod: true,
-      allowHashBang: true,
-    });
-    
-    return parseJavaScriptAST(ast, code, extractionContext);
-  } catch (error) {
-    console.error("JavaScript fallback parsing failed:", error.message);
-    return [];
-  }
-}
-
-// Parse JavaScript AST using the same logic as javascript-parser.js
-function parseJavaScriptAST(ast, code, extractionContext) {
-  detectedSegments = [];
-  currentContext = extractionContext;
-  
-  const walk = require('acorn-walk');
-  
-  // Add segment helper
-  function addSegment(node, type, name, options = {}) {
-    if (!node.loc) return;
-
-    const startLine = node.loc.start.line - 1;
-    const endLine = node.loc.end.line - 1;
-    
-    let finalName = name || "anonymous";
-    let parent = options.parent || null;
-    let extendsClass = options.extends || null;
-    
-    if (type === "method" && currentContext && currentContext.PreserveContext && options.parent) {
-      finalName = `${options.parent}.${finalName}`;
-    }
-
-    detectedSegments.push({
-      name: finalName,
-      type,
-      startLine,
-      endLine,
-      content: "", // Will be filled later
-      parent: parent,
-      extends: extendsClass,
-    });
-  }
-  
-  // Use the same AST walking logic as javascript-parser.js
-  walk.ancestor(ast, {
-    ClassDeclaration(node, ancestors) {
-      const className = node.id ? node.id.name : "AnonymousClass";
-      const extendsClass = node.superClass ? node.superClass.name : null;
-      addSegment(node, "class", className, { extends: extendsClass });
-    },
-    
-    MethodDefinition(node, ancestors) {
-      const methodName = node.key.name || node.key.value;
-      
-      let parentClass = null;
-      for (let i = ancestors.length - 1; i >= 0; i--) {
-        if (ancestors[i].type === "ClassDeclaration" || ancestors[i].type === "ClassExpression") {
-          parentClass = ancestors[i].id ? ancestors[i].id.name : "AnonymousClass";
-          break;
-        }
-      }
-      
-      addSegment(node, "method", methodName, { parent: parentClass });
-    },
-    
-    FunctionDeclaration(node, ancestors) {
-      if (node.id) {
-        addSegment(node, "function", node.id.name);
-      }
-    },
-    
-    // Add other node types as needed...
-  });
-  
-  return detectedSegments;
-}
-
 // Parser and language initialization
 let parserInitialized = false;
 let parser = null;
@@ -143,9 +49,15 @@ const loadedLanguages = new Map();
 async function initParser() {
   if (parserInitialized) return parser;
 
-  await Parser.init();
-  parser = new Parser();
-  parserInitialized = true;
+  // web-tree-sitter 0.21: Parser is the constructor directly
+  try {
+    await Parser.init();
+    parser = new Parser();
+    parserInitialized = true;
+  } catch (error) {
+    console.error("Failed to initialize parser:", error.message);
+    throw error;
+  }
   return parser;
 }
 
@@ -192,16 +104,15 @@ async function loadLanguage(language) {
 function traverseWithAncestors(node, ancestors, visitor) {
   // Call visitor with current node and ancestors
   visitor(node, ancestors);
-  
+
   // Traverse children with updated ancestor chain
-  const cursor = node.walk();
-  
-  if (cursor.gotoFirstChild()) {
-    do {
-      const childNode = cursor.currentNode;
+  const childCount = node.childCount;
+  for (let i = 0; i < childCount; i++) {
+    const childNode = node.child(i);
+    if (childNode) {
       const newAncestors = [...ancestors, node]; // Add current node to ancestor chain
       traverseWithAncestors(childNode, newAncestors, visitor);
-    } while (cursor.gotoNextSibling());
+    }
   }
 }
 
@@ -273,6 +184,12 @@ class TreeSitterExtractor {
         break;
       case 'bash':
         this.processBashNode(node, ancestors);
+        break;
+      case 'powershell':
+        this.processPowerShellNode(node, ancestors);
+        break;
+      case 'r':
+        this.processRNode(node, ancestors);
         break;
     }
   }
@@ -402,17 +319,17 @@ class TreeSitterExtractor {
           addSegment(node, 'function', functionName, ancestors);
         }
         break;
-        
+
       case 'variable_assignment':
         const varName = node.childForFieldName('name')?.text;
         const value = node.childForFieldName('value')?.text;
-        
+
         // Check for readonly/declare -r patterns
         if (varName && (value?.includes('readonly') || ancestors.some(a => a.text?.includes('declare -r')))) {
           addSegment(node, 'constant', varName, ancestors);
         }
         break;
-        
+
       case 'command':
         // Handle export commands
         if (node.firstChild?.text === 'export') {
@@ -420,6 +337,107 @@ class TreeSitterExtractor {
           if (exportVar) {
             addSegment(node, 'export', exportVar, ancestors);
             addSegment(node, 'global', exportVar, ancestors);
+          }
+        }
+        break;
+    }
+  }
+
+  processPowerShellNode(node, ancestors) {
+    // Debug: log all interesting node types for PowerShell
+    const interestingTypes = ['function_definition', 'class_definition', 'method_definition',
+                             'function_statement', 'class_statement', 'assignment_expression'];
+    if (node.text && node.text.length > 10 && node.text.includes('function') || node.text.includes('class')) {
+      console.error(`PowerShell node type: ${node.type}, text: ${node.text?.substring(0, 50)}`);
+    }
+
+    switch (node.type) {
+      case 'function_definition':  // Updated from function_statement
+      case 'class_statement':
+      case 'class_definition':
+        const className = node.childForFieldName('name')?.text;
+        const baseClass = node.childForFieldName('base_class')?.text;
+        if (className) {
+          addSegment(node, 'class', className, ancestors, { extends: baseClass });
+        }
+        break;
+
+      case 'function_statement':
+        const functionName = node.childForFieldName('name')?.text;
+        if (functionName) {
+          addSegment(node, 'function', functionName, ancestors);
+        }
+        break;
+
+      case 'method_definition':
+        const methodName = node.childForFieldName('name')?.text;
+        if (methodName) {
+          addSegment(node, 'method', methodName, ancestors);
+        }
+        break;
+
+      case 'variable_assignment':
+        const varNode = node.childForFieldName('variable');
+        const varName = varNode?.text;
+
+        // Check for global/script scope
+        if (varName?.includes('$global:') || varName?.includes('$script:')) {
+          const cleanName = varName.replace(/\$(global|script):/, '');
+          addSegment(node, 'global', cleanName, ancestors);
+        }
+        // Check for readonly constants
+        else if (varNode?.parent?.text?.includes('[readonly]')) {
+          addSegment(node, 'constant', varName?.replace('$', ''), ancestors);
+        }
+        break;
+
+      case 'export_statement':
+        // Handle Export-ModuleMember
+        const exportTarget = node.childForFieldName('target')?.text;
+        if (exportTarget) {
+          addSegment(node, 'export', exportTarget, ancestors);
+        }
+        break;
+    }
+  }
+
+  processRNode(node, ancestors) {
+    switch (node.type) {
+      case 'function_definition':
+      case 'binary_operator':
+        // Handle function <- function() or name <- function()
+        if (node.type === 'binary_operator' && node.childForFieldName('operator')?.text === '<-') {
+          const left = node.childForFieldName('left');
+          const right = node.childForFieldName('right');
+
+          if (right?.text?.startsWith('function')) {
+            const functionName = left?.text;
+            if (functionName) {
+              addSegment(node, 'function', functionName, ancestors);
+            }
+          }
+          // Check for constants (uppercase names)
+          else if (left?.text && /^[A-Z][A-Z._0-9]*$/.test(left.text)) {
+            addSegment(node, 'constant', left.text, ancestors);
+          }
+        }
+        break;
+
+      case 'assignment':
+        // Handle = assignments
+        const target = node.childForFieldName('left')?.text;
+        if (target && /^[A-Z][A-Z._0-9]*$/.test(target)) {
+          addSegment(node, 'constant', target, ancestors);
+        }
+        break;
+
+      case 'call':
+        // Handle assign() for global variables
+        const fnName = node.childForFieldName('function')?.text;
+        if (fnName === 'assign' || fnName === '<<-') {
+          const varName = node.childForFieldName('arguments')?.firstChild?.text;
+          if (varName) {
+            addSegment(node, 'global', varName.replace(/[\"']/g, ''), ancestors);
           }
         }
         break;
@@ -449,14 +467,6 @@ class TreeSitterExtractor {
 }
 
 // Apply extraction context filtering (shared with javascript-parser.js)
-function shouldExcludeConstant(name, context) {
-  if (/^[a-z]$/.test(name)) return true;
-  if (['i', 'j', 'k', 'idx', 'index', 'temp', 'tmp'].includes(name.toLowerCase())) return true;
-  if (name.startsWith('_')) return true;
-  if (name.length <= 2 && name !== name.toUpperCase()) return true;
-  return false;
-}
-
 function matchesExtractionContext(segment, extractionContext) {
   if (!extractionContext) return true;
   
@@ -504,28 +514,6 @@ function applyExtractionContext(segments, extractionContext, code) {
   }
   
   return filtered;
-}
-
-// Language detection based on file extension
-function detectLanguage(filePath) {
-  const ext = path.extname(filePath).toLowerCase();
-
-  const languageMap = {
-    '.js': 'javascript',
-    '.jsx': 'javascript',
-    '.mjs': 'javascript',
-    '.cjs': 'javascript',
-    '.py': 'python',
-    '.ps1': 'powershell',
-    '.psm1': 'powershell',
-    '.psd1': 'powershell',
-    '.sh': 'bash',
-    '.bash': 'bash',
-    '.r': 'r',
-    '.R': 'r'
-  };
-
-  return languageMap[ext] || 'unknown';
 }
 
 // Main parsing function with tree-sitter and fallbacks
@@ -751,7 +739,9 @@ function getLanguagePatterns(language) {
     powershell: [
       { regex: /^class\s+(\w+)/i, type: "class" },
       { regex: /^function\s+([\w-]+)/i, type: "function" },
-      { regex: /^\$(global|script):(\w+)/i, type: "global" }
+      { regex: /^\s*function\s+([\w-]+)/i, type: "function" },  // Allow indented functions
+      { regex: /^\$(global|script):(\w+)/i, type: "global" },
+      { regex: /^\s*\[(\w+)\]\s*(\w+)\s*\(/i, type: "method" }  // Class methods
     ],
     
     bash: [
@@ -835,10 +825,12 @@ async function main() {
   }
 }
 
-// Run main function
-main();
-
 // Export for module use
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { parseCode, detectLanguage, TreeSitterExtractor };
+}
+
+// Run main function only if called directly
+if (require.main === module) {
+  main();
 }
