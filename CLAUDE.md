@@ -108,38 +108,82 @@ Git shows file-level diffs which can be overwhelming when tracking specific func
 - Parser architecture supports extension to other languages via `lib/parsers/`
 - Compressed diff innovation: Shows final code once with all historical changes marked inline at their line positions (e.g., "L52: - old code" followed by "L52: + new code")
 
-### Parser Implementation Status
+### Parser Implementation Status (Updated September 2025)
 
-- **JavaScript**: ✅ Full support via web-tree-sitter WASM (v15) or Acorn fallback
-- **Python**: ✅ Full support via web-tree-sitter WASM (v15)
-- **Bash**: ✅ Full support via web-tree-sitter WASM (v15)
-- **PowerShell**: ✅ Full support via web-tree-sitter WASM (v15)
-  - Uses Airbus tree-sitter-powershell grammar
+- **JavaScript**: ✅ Full support via web-tree-sitter WASM (language version 15)
+  - Built from tree-sitter/tree-sitter-javascript (latest)
+  - Acorn fallback available if WASM fails
+- **Python**: ✅ Full support via web-tree-sitter WASM (language version 15)
+  - Built from tree-sitter/tree-sitter-python (latest)
+- **Bash**: ✅ Full support via web-tree-sitter WASM (language version 15)
+  - Built from tree-sitter/tree-sitter-bash (latest)
+- **PowerShell**: ✅ Full support via web-tree-sitter WASM (language version 15)
+  - Built from Airbus-CERT/tree-sitter-powershell
   - Successfully extracts functions, classes, and methods
-  - Requires web-tree-sitter 0.25.x for language version 15 compatibility
 
 ### Technical Requirements
 
 - **web-tree-sitter**: Version 0.25.x required (supports language version 15)
+- **tree-sitter CLI**: Version 0.25.9 or later
+- **Emscripten SDK**: Required for building WASM files (included in code_evolver/emsdk)
 - **Initialization**: Uses `TreeSitter.Parser.init()` then `new TreeSitter.Parser()`
-- **WASM files**: All grammars compiled with tree-sitter CLI 0.25.x
+- **WASM files**: All grammars compiled with tree-sitter CLI 0.25.x and emcc from emsdk
 
-### Building PowerShell WASM
+### Building Grammar WASM Files (September 2025 Method)
+
+All grammar WASM files are located in `code_evolver/grammars/`. If you need to rebuild them:
+
+#### Prerequisites
+1. **Emscripten SDK**: Already included at `code_evolver/emsdk/`
+2. **tree-sitter CLI**: Install via `npm install -g tree-sitter-cli@0.25.9`
+3. **Node.js**: Available at `/c/nvm4w/nodejs/` (Windows NVM)
+
+#### Activation and Build Process
 
 ```bash
-# Clone working PowerShell grammar (Airbus version)
-git clone https://github.com/airbus-cert/tree-sitter-powershell
+# 1. Activate Emscripten SDK (Windows PowerShell)
+powershell.exe -ExecutionPolicy Bypass -File "C:\Users\jacks\experiments\WebStormProjects\vibe-reader-extension\vibe_tools\code_evolver\emsdk\emsdk_env.ps1"
 
-# Generate parser
+# 2. Set environment variables for Git Bash
+export PATH="/c/Users/jacks/experiments/WebStormProjects/vibe-reader-extension/vibe_tools/code_evolver/emsdk:/c/Users/jacks/experiments/WebStormProjects/vibe-reader-extension/vibe_tools/code_evolver/emsdk/upstream/emscripten:$PATH"
+export EMSDK_PYTHON="C:/Users/jacks/experiments/WebStormProjects/vibe-reader-extension/vibe_tools/code_evolver/emsdk/python/3.13.3_64bit/python.exe"
+
+# 3. Build JavaScript Grammar
+git clone https://github.com/tree-sitter/tree-sitter-javascript
+cd tree-sitter-javascript
+/c/nvm4w/nodejs/npx tree-sitter generate
+emcc src/parser.c src/scanner.c -o tree-sitter-javascript.wasm -I./src -Os -fPIC -s WASM=1 -s SIDE_MODULE=2 -s EXPORTED_FUNCTIONS="['_tree_sitter_javascript']"
+
+# 4. Build Python Grammar
+git clone https://github.com/tree-sitter/tree-sitter-python
+cd tree-sitter-python
+/c/nvm4w/nodejs/npx tree-sitter generate
+emcc src/parser.c src/scanner.c -o tree-sitter-python.wasm -I./src -Os -fPIC -s WASM=1 -s SIDE_MODULE=2 -s EXPORTED_FUNCTIONS="['_tree_sitter_python']"
+
+# 5. Build Bash Grammar
+git clone https://github.com/tree-sitter/tree-sitter-bash
+cd tree-sitter-bash
+/c/nvm4w/nodejs/npx tree-sitter generate
+emcc src/parser.c src/scanner.c -o tree-sitter-bash.wasm -I./src -Os -fPIC -s WASM=1 -s SIDE_MODULE=2 -s EXPORTED_FUNCTIONS="['_tree_sitter_bash']"
+
+# 6. Build PowerShell Grammar (Airbus version works best)
+git clone https://github.com/Airbus-CERT/tree-sitter-powershell
 cd tree-sitter-powershell
-tree-sitter generate
-
-# Build WASM with emscripten (note lowercase 'powershell')
+/c/nvm4w/nodejs/npx tree-sitter generate
+# Note: PowerShell uses lowercase in the export function name
 emcc src/parser.c src/scanner.c -o tree-sitter-powershell.wasm -I./src -Os -fPIC -s WASM=1 -s SIDE_MODULE=2 -s EXPORTED_FUNCTIONS="['_tree_sitter_powershell']"
 
-# Copy to grammars directory
-copy tree-sitter-powershell.wasm ..\grammars\
+# 7. Copy all WASM files to grammars directory
+cp *.wasm ../code_evolver/grammars/
 ```
+
+#### Important Notes for Building
+
+- **Python Path Issues**: The emcc command may fail with "Python not found" on Windows. Use the EMSDK_PYTHON environment variable to point to the Python included with emsdk.
+- **NPX Path**: On Windows with NVM, use the full path `/c/nvm4w/nodejs/npx` instead of just `npx`
+- **Function Names**: Each grammar exports a function with its language name (e.g., `_tree_sitter_javascript`). PowerShell uses lowercase `_tree_sitter_powershell`.
+- **Scanner Files**: Some grammars have `scanner.c` or `scanner.cc` files that must be included in the emcc command
+- **Latest Versions**: All grammars rebuilt with tree-sitter CLI 0.25.9 and web-tree-sitter 0.25.x
 
 ## Development History
 

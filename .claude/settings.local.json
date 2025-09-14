@@ -5,7 +5,15 @@
       "Bash(dir templates)",
       "Bash(dir utils)",
       "Read(//c/Users/jacks/AppData/Local/npm-cache/_logs/**)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(git clone:*)",
+      "Bash(npx tree-sitter build:*)",
+      "Bash(powershell.exe:*)",
+      "Bash(cp:*)",
+      "Bash(export:*)",
+      "Bash(/c/nvm4w/nodejs/npx tree-sitter generate)",
+      "Bash(emcc:*)",
+      "Bash(node:*)"
     ],
     "deny": [],
     "ask": []
