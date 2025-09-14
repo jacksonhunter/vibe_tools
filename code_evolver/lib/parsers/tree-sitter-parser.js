@@ -2,30 +2,17 @@
 
 /*
  * Tree-sitter Multi-Language Parser with Ancestor Tracking
- * 
- * This parser uses actual tree-sitter grammars to parse multiple languages
- * and extract code elements with context preservation using ancestor tracking.
- * 
- * Supported languages: JavaScript, Python, PowerShell, Bash, R
- * 
- * Installation required:
- * npm install tree-sitter tree-sitter-javascript tree-sitter-python tree-sitter-bash
+ *
+ * Uses web-tree-sitter (WASM) to avoid Windows build tool requirements
+ * Supports: JavaScript, Python, PowerShell, Bash, R
+ *
+ * Installation: npm install web-tree-sitter
+ * Grammar files: Place .wasm files in grammars/ directory
  */
 
 const fs = require('fs');
 const path = require('path');
-
-// Tree-sitter imports
-const Parser = require('tree-sitter');
-const JavaScript = require('tree-sitter-javascript');
-const Python = require('tree-sitter-python');
-const Bash = require('tree-sitter-bash');
-
-// Note: Some grammars may need additional installation
-// tree-sitter-powershell and tree-sitter-r may need manual setup
-
-let detectedSegments = [];
-let currentContext = null;
+const Parser = require('web-tree-sitter');
 
 let detectedSegments = [];
 let currentContext = null;
@@ -34,10 +21,10 @@ let currentLanguageConfig = null;
 // Language detection based on file extension
 function detectLanguage(filePath) {
   const ext = path.extname(filePath).toLowerCase();
-  
+
   const languageMap = {
     '.js': 'javascript',
-    '.jsx': 'javascript', 
+    '.jsx': 'javascript',
     '.mjs': 'javascript',
     '.cjs': 'javascript',
     '.py': 'python',
@@ -49,7 +36,7 @@ function detectLanguage(filePath) {
     '.r': 'r',
     '.R': 'r'
   };
-  
+
   return languageMap[ext] || 'unknown';
 }
 
@@ -147,37 +134,56 @@ function parseJavaScriptAST(ast, code, extractionContext) {
   return detectedSegments;
 }
 
-// Language detection and parser setup
-function createParser(language) {
-  const parser = new Parser();
-  
+// Parser and language initialization
+let parserInitialized = false;
+let parser = null;
+const loadedLanguages = new Map();
+
+// Initialize parser once
+async function initParser() {
+  if (parserInitialized) return parser;
+
+  await Parser.init();
+  parser = new Parser();
+  parserInitialized = true;
+  return parser;
+}
+
+// Load language grammar from WASM file
+async function loadLanguage(language) {
+  if (loadedLanguages.has(language)) {
+    return loadedLanguages.get(language);
+  }
+
+  // Map language to grammar file
+  const grammarFiles = {
+    'javascript': 'tree-sitter-javascript.wasm',
+    'python': 'tree-sitter-python.wasm',
+    'powershell': 'tree-sitter-powershell.wasm',
+    'bash': 'tree-sitter-bash.wasm',
+    'r': 'tree-sitter-r.wasm'
+  };
+
+  const grammarFile = grammarFiles[language];
+  if (!grammarFile) {
+    console.error(`No grammar available for language: ${language}`);
+    return null;
+  }
+
+  const grammarPath = path.join(__dirname, '..', '..', 'grammars', grammarFile);
+
+  if (!fs.existsSync(grammarPath)) {
+    console.error(`Grammar file not found: ${grammarPath}`);
+    console.error(`Please download ${grammarFile} to the grammars directory`);
+    return null;
+  }
+
   try {
-    switch (language) {
-      case 'javascript':
-        parser.setLanguage(JavaScript);
-        break;
-      case 'python':
-        parser.setLanguage(Python);
-        break;
-      case 'bash':
-        parser.setLanguage(Bash);
-        break;
-      case 'powershell':
-        // Fallback - tree-sitter-powershell may not be available
-        console.error("PowerShell grammar not available, using fallback");
-        return null;
-      case 'r':
-        // Fallback - tree-sitter-r may not be available  
-        console.error("R grammar not available, using fallback");
-        return null;
-      default:
-        console.error(`Unsupported language: ${language}`);
-        return null;
-    }
-    
-    return parser;
+    const languageObj = await Parser.Language.load(grammarPath);
+    loadedLanguages.set(language, languageObj);
+    return languageObj;
   } catch (error) {
-    console.error(`Failed to create parser for ${language}:`, error.message);
+    console.error(`Failed to load grammar for ${language}:`, error.message);
     return null;
   }
 }
@@ -503,10 +509,10 @@ function applyExtractionContext(segments, extractionContext, code) {
 // Language detection based on file extension
 function detectLanguage(filePath) {
   const ext = path.extname(filePath).toLowerCase();
-  
+
   const languageMap = {
     '.js': 'javascript',
-    '.jsx': 'javascript', 
+    '.jsx': 'javascript',
     '.mjs': 'javascript',
     '.cjs': 'javascript',
     '.py': 'python',
@@ -518,7 +524,7 @@ function detectLanguage(filePath) {
     '.r': 'r',
     '.R': 'r'
   };
-  
+
   return languageMap[ext] || 'unknown';
 }
 
@@ -526,22 +532,26 @@ function detectLanguage(filePath) {
 async function parseCode(code, filePath, extractionContext, languageConfig) {
   const language = detectLanguage(filePath);
   console.error(`Detected language: ${language} for file: ${filePath}`);
-  
+
   let segments = [];
-  
+
   try {
-    // Try tree-sitter parsing first
-    const parser = createParser(language);
-    
-    if (parser) {
+    // Initialize parser if needed
+    await initParser();
+
+    // Try to load language grammar
+    const languageObj = await loadLanguage(language);
+
+    if (languageObj) {
       console.error(`Using tree-sitter parser for ${language}`);
+      parser.setLanguage(languageObj);
       const tree = parser.parse(code);
       const extractor = new TreeSitterExtractor(language);
       segments = extractor.extract(tree, extractionContext);
     } else {
       // Fallback for unsupported languages or missing grammars
       console.error(`Tree-sitter not available for ${language}, using fallback`);
-      
+
       if (language === 'javascript') {
         // Special fallback to Acorn for JavaScript
         segments = await parseWithAcornFallback(code, filePath, extractionContext);
@@ -550,10 +560,10 @@ async function parseCode(code, filePath, extractionContext, languageConfig) {
         segments = parseWithRegexFallback(code, language, extractionContext);
       }
     }
-    
+
     // Apply extraction context filtering
     segments = applyExtractionContext(segments, extractionContext, code);
-    
+
     // Add content to segments
     const lines = code.split("\n");
     segments = segments.map(segment => ({
@@ -561,12 +571,12 @@ async function parseCode(code, filePath, extractionContext, languageConfig) {
       content: lines.slice(segment.startLine, segment.endLine + 1).join("\n"),
       lineCount: segment.endLine - segment.startLine + 1
     }));
-    
+
     return segments;
-    
+
   } catch (error) {
     console.error(`Error parsing ${language}:`, error.message);
-    
+
     // Final fallback to regex parsing
     console.error("Using regex fallback");
     return parseWithRegexFallback(code, language, extractionContext);
@@ -830,5 +840,5 @@ main();
 
 // Export for module use
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseCode, detectLanguage, LanguageParser };
+  module.exports = { parseCode, detectLanguage, TreeSitterExtractor };
 }

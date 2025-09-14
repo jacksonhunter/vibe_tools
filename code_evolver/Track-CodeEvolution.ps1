@@ -1816,4 +1816,52 @@ function Main {
             -Exports $Exports `
             -FilePath $FilePath `
             -OutputDir $OutputDir
-ame $ClassName -FilePath $FilePath -OutputDir $OutputDir
+        
+        if (-not $fileVersions -or $fileVersions.Count -eq 0) {
+            Write-Warning "No matching files found in Git history."
+            return
+        }
+        
+        Write-Host "Found $($fileVersions.Count) file versions" -ForegroundColor Green
+        
+        # Step 2: Parse with Acorn
+        Write-Host "`nStep 2: Parsing with Acorn AST analysis..." -ForegroundColor Yellow
+        $parsedVersions = Parse-FileVersions -FileVersions $fileVersions -BaseClass $BaseClass -ClassName $ClassName -Parser $Parser
+        
+        Write-Host "Successfully parsed $($parsedVersions.Count) versions" -ForegroundColor Green
+        
+        # Step 3: Build evolution timeline
+        Write-Host "`nStep 3: Building evolution timeline..." -ForegroundColor Yellow
+        $evolution = Build-EvolutionTimeline -ParsedVersions $parsedVersions -OutputDir $OutputDir
+        
+        Write-Host "Tracked evolution of $($evolution.Count) code elements" -ForegroundColor Green
+        
+        # Step 4: Show results
+        Show-EvolutionResults -Evolution $evolution -ShowDiffs:$ShowDiffs
+        
+        # Step 5: Export if requested
+        if ($ExportHtml) {
+            Write-Host "`nStep 5: Exporting HTML report..." -ForegroundColor Yellow
+            Export-HtmlReport -Evolution $evolution -OutputDir $OutputDir
+        }
+        
+        if ($ExportUnifiedDiff) {
+            Write-Host "`nExporting unified diff report..." -ForegroundColor Yellow
+            Export-UnifiedDiff -Evolution $evolution -OutputDir $OutputDir
+        }
+
+        if ($ExportCompressedDiff) {
+            Write-Host "`nExporting compressed diff report..." -ForegroundColor Yellow
+            Export-CompressedDiff -Evolution $evolution -OutputDir $OutputDir
+        }
+
+        Write-Host "`nAnalysis complete! Results saved to: $OutputDir" -ForegroundColor Green
+        
+    } finally {
+        # Cleanup
+        Cleanup-TempFiles -OutputDir $OutputDir
+    }
+}
+
+# Execute main function
+Main
