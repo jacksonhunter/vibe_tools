@@ -415,7 +415,11 @@ function Get-GitFileVersions {
     
     # Find relevant files
     if ($FilePath) {
-        $relevantFiles = @($FilePath)
+        # Normalize path for Git (convert backslashes to forward slashes and remove leading .\ or .\)
+        $normalizedPath = $FilePath -replace '^\.\\', '' -replace '^\./', '' -replace '\\', '/'
+        Write-Verbose "Original path: $FilePath"
+        Write-Verbose "Normalized path: $normalizedPath"
+        $relevantFiles = @($normalizedPath)
     }
     else {
         $relevantFiles = @()
@@ -438,15 +442,27 @@ function Get-GitFileVersions {
     }
     
     Write-Host "Found $($relevantFiles.Count) relevant files" -ForegroundColor Green
+    if ($VerbosePreference -eq 'Continue' -and $relevantFiles.Count -gt 0) {
+        Write-Verbose "Files to process:"
+        foreach ($f in $relevantFiles) {
+            Write-Verbose "  - $f"
+        }
+    }
     
     # For each file, get all versions
     foreach ($file in $relevantFiles) {
         Write-Verbose "Processing file: $file"
-        
+
         # Get commit history for this file
+        Write-Verbose "  Running: git log --follow --pretty=format:'%H|%ai|%s|%an' -- $file"
         $commits = git log --follow --pretty=format:"%H|%ai|%s|%an" -- $file
         
-        if (-not $commits) { continue }
+        if (-not $commits) {
+            Write-Verbose "  No commits found for file: $file"
+            continue
+        }
+        $commitCount = @($commits).Count
+        Write-Verbose "  Found $commitCount commits for file: $file"
         
         foreach ($commitLine in $commits) {
             if ([string]::IsNullOrWhiteSpace($commitLine)) { continue }
@@ -460,8 +476,14 @@ function Get-GitFileVersions {
             $author = $parts[3]
             
             # Get file content at this commit
+            if ($VerbosePreference -eq 'Continue') {
+                Write-Verbose "  Extracting content from commit: $($commit.Substring(0,7))"
+            }
             $content = git show "$commit`:$file" 2>$null
-            if (-not $content) { continue }
+            if (-not $content) {
+                Write-Verbose "    No content found for commit: $($commit.Substring(0,7))"
+                continue
+            }
             
             # Quick filter - only include if it matches our patterns (if we have any)
             $matchesPattern = $true
@@ -532,6 +554,14 @@ function Parse-FileVersions {
     
     foreach ($version in $FileVersions) {
         Write-Verbose "Parsing $($version.File) at commit $($version.Commit.Substring(0,8))"
+        if ($VerbosePreference -eq 'Continue') {
+            Write-Verbose "  Date: $($version.Date)"
+            Write-Verbose "  Author: $($version.Author)"
+            if ($version.Segments) {
+                $segmentGroups = $version.Segments | Group-Object type
+                Write-Verbose "  Segments found: $($segmentGroups.Name -join ', ')"
+            }
+        }
         
         try {
             # Build parser arguments with extraction context
@@ -1068,7 +1098,7 @@ function Get-CompressedDiff {
 
     # Add all commit headers at the top
     foreach ($header in $allHeaders) {
-        $output += "<div class='compressed-header'>$header</div>`n"
+        $output += "<div class='compressed-header'>$header</div>"
     }
 
     # Get the final version content
@@ -1076,7 +1106,7 @@ function Get-CompressedDiff {
     $finalLines = $finalContent -split "`n"
 
     # Output the final content with all changes inline
-    $output += "<div class='compressed-content' style='margin-top: 10px; padding: 10px; background: rgb(0 0 0); border: 1px solid rgb(0 63 103); border-radius: 4px;'>`n" <# ##NeonSurge --bg-primary --border-subtle #>
+    $output += "<div class='compressed-content' style='margin-top: 10px; padding: 10px; background: rgb(0 0 0); border: 1px solid rgb(0 63 103); border-radius: 4px;'>" <# ##NeonSurge --bg-primary --border-subtle #>
 
     for ($lineNum = 1; $lineNum -le $finalLines.Count; $lineNum++) {
         # First, show any changes for this line
@@ -1089,10 +1119,10 @@ function Get-CompressedDiff {
                 $tooltipText = "$($change.ToCommit): $safeMessage by $($change.CommitAuthor) at $($change.CommitDate)"
 
                 if ($change.Type -eq 'delete') {
-                    $output += "<div class='diff-line diff-del $shadeClass' title='$tooltipText'><span class='line-num'>L$lineNum</span>: - $escapedContent</div>`n"
+                    $output += "<div class='diff-line diff-del $shadeClass' title='$tooltipText'><span class='line-num'>L$lineNum</span>: - $escapedContent</div>"
                 }
                 else {
-                    $output += "<div class='diff-line diff-add $shadeClass' title='$tooltipText'><span class='line-num'>L$lineNum</span>: + $escapedContent</div>`n"
+                    $output += "<div class='diff-line diff-add $shadeClass' title='$tooltipText'><span class='line-num'>L$lineNum</span>: + $escapedContent</div>"
                 }
             }
         }
@@ -1100,7 +1130,7 @@ function Get-CompressedDiff {
         # Then show the current line (if it exists in final version) with line number
         if ($lineNum -le $finalLines.Count) {
             $escapedLine = [System.Web.HttpUtility]::HtmlEncode($finalLines[$lineNum - 1])
-            $output += "<div class='diff-line unchanged'><span class='line-num-unchanged'>$lineNum</span> $escapedLine</div>`n"
+            $output += "<div class='diff-line unchanged'><span class='line-num-unchanged'>$lineNum</span> $escapedLine</div>"
         }
     }
 
@@ -1142,10 +1172,44 @@ function Export-HtmlReport {
         .added { color: rgb(0 255 127); } /*##NeonSurge --success-200 */
         .removed { color: rgb(255 20 147); } /*##NeonSurge --primary-500 */
         .modified { color: rgb(255 204 0); } /*##NeonSurge --accent-500 */
-        .toggle-btn { background: rgb(0 17 34); color: rgb(255 255 255); border: 1px solid rgb(0 63 103); padding: 6px 12px; border-radius: 3px; cursor: pointer; font-size: 11px; margin: 2px; } /*##NeonSurge --bg-surface --text-primary --border-subtle */
-        .toggle-btn:hover { background: rgb(25 25 112); border-color: rgb(13 92 255); } /*##NeonSurge --bg-elevated --border-default */
-        .diff-btn { background: rgb(13 92 255); color: white; border: 1px solid rgb(13 92 255); } /*##NeonSurge --secondary-500 */
-        .diff-btn:hover { background: rgb(74 150 255); border-color: rgb(74 150 255); } /*##NeonSurge --secondary-600 */
+        /* Radio group button styles */
+        .view-buttons { display: inline-flex; gap: 4px; }
+        .toggle-btn {
+            background: rgb(0 17 34);
+            color: rgb(136 255 255);
+            border: 1px solid rgb(0 63 103);
+            padding: 6px 12px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 11px;
+            transition: all 0.2s ease;
+        } /*##NeonSurge --bg-surface --text-muted --border-subtle */
+        .toggle-btn:hover:not(.active) {
+            background: rgb(25 25 112);
+            border-color: rgb(13 92 255);
+            color: rgb(255 255 255);
+        } /*##NeonSurge --bg-elevated --border-default */
+
+        /* Active states for each button type */
+        .toggle-btn.active {
+            cursor: default;
+            font-weight: bold;
+        }
+        .toggle-btn.code-btn.active {
+            background: rgb(255 204 0);
+            color: rgb(0 0 0);
+            border-color: rgb(255 204 0);
+        } /*##NeonSurge --accent-500 Electric Yellow */
+        .toggle-btn.diff-btn.active {
+            background: rgb(0 255 255);
+            color: rgb(0 0 0);
+            border-color: rgb(0 255 255);
+        } /*##NeonSurge --secondary-300 Electric Cyan */
+        .toggle-btn.compressed-btn.active {
+            background: rgb(255 20 147);
+            color: rgb(255 255 255);
+            border-color: rgb(255 20 147);
+        } /*##NeonSurge --primary-500 Electric Pink */
         .code-content.collapsed { display: none; }
         .diff-container { display: none; background: rgb(0 0 0); border-radius: 4px; margin-top: 10px; border: 1px solid rgb(0 63 103); } /*##NeonSurge --bg-primary --border-subtle */
         .diff-container.active { display: block; }
@@ -1215,19 +1279,6 @@ function Export-HtmlReport {
         }
 
         /* Compressed Diff Styles - Neon Surge Theme (High Contrast) */
-        .compressed-diff-btn {
-            background: rgb(255 20 147);
-            color: rgb(255 255 255);
-            border: 1px solid rgb(255 20 147); /*##NeonSurge --primary-500 */
-            padding: 8px 16px;
-            border-radius: 3px;
-            cursor: pointer;
-            font-size: 14px;
-            transition: background 0.2s ease;
-        }
-        .compressed-diff-btn:hover {
-            background: rgb(255 63 132); /*##NeonSurge --primary-400 */
-        }
         .compressed-header {
             background: rgb(13 13 42); /*##NeonSurge --bg-secondary */
             color: rgb(0 255 255); /*##NeonSurge --text-secondary */
@@ -1271,6 +1322,21 @@ function Export-HtmlReport {
             font-weight: bold;
         }
 
+        /* Hover styles with electric yellow highlight */
+        .compressed-content .diff-line:hover {
+            background: rgba(255, 204, 0, 0.2) !important; /* Electric yellow with transparency */
+            border-left: 3px solid rgb(255 204 0); /* Solid electric yellow border */
+            padding-left: 7px; /* Adjust padding to compensate for border */
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .compressed-content .diff-line:hover .line-num,
+        .compressed-content .diff-line:hover .line-num-unchanged {
+            color: rgb(255 204 0); /* Electric yellow for line numbers on hover */
+            font-weight: bold;
+        }
+
         /* Shade-based colors for additions using success spectrum */
         .diff-line.diff-add.shade-100 {
             background: rgba(152, 255, 152, 0.15);
@@ -1278,29 +1344,29 @@ function Export-HtmlReport {
             border-left: 2px solid rgb(152 255 152);
         }
         .diff-line.diff-add.shade-200 {
-            background: rgba(168, 230, 207, 0.15);
-            color: rgb(168 230 207);
-            border-left: 2px solid rgb(168 230 207);
-        }
-        .diff-line.diff-add.shade-300 {
-            background: rgba(0, 255, 127, 0.15);
+            background: rgba(0, 255, 127, 0.15); /* success-200 */
             color: rgb(0 255 127);
             border-left: 2px solid rgb(0 255 127);
         }
-        .diff-line.diff-add.shade-400 {
-            background: rgba(50, 205, 50, 0.15);
+        .diff-line.diff-add.shade-300 {
+            background: rgba(50, 205, 50, 0.15); /* success-300 */
             color: rgb(50 205 50);
             border-left: 2px solid rgb(50 205 50);
         }
-        .diff-line.diff-add.shade-500 {
-            background: rgba(166, 226, 46, 0.15);
-            color: rgb(166 226 46);
-            border-left: 2px solid rgb(166 226 46);
-        }
-        .diff-line.diff-add.shade-600 {
-            background: rgba(32, 178, 170, 0.15);
+        .diff-line.diff-add.shade-400 {
+            background: rgba(32, 178, 170, 0.15); /* success-400 */
             color: rgb(32 178 170);
             border-left: 2px solid rgb(32 178 170);
+        }
+        .diff-line.diff-add.shade-500 {
+            background: rgba(0, 178, 210, 0.15); /* success-500 */
+            color: rgb(0 178 210);
+            border-left: 2px solid rgb(0 178 210);
+        }
+        .diff-line.diff-add.shade-600 {
+            background: rgba(0, 133, 122, 0.15); /* success-600 */
+            color: rgb(0 133 122);
+            border-left: 2px solid rgb(0 133 122);
         }
         .diff-line.diff-add.shade-700 {
             background: rgba(0, 255, 0, 0.15);
@@ -1308,13 +1374,13 @@ function Export-HtmlReport {
             border-left: 2px solid rgb(0 255 0);
         }
         .diff-line.diff-add.shade-800 {
-            background: rgba(0, 92, 0, 0.15);
-            color: rgb(124 252 0);  /* Lighter for visibility */
+            background: rgba(0, 92, 0, 0.15); /* success-800 */
+            color: rgb(0 92 0);
             border-left: 2px solid rgb(0 92 0);
         }
         .diff-line.diff-add.shade-900 {
-            background: rgba(0, 50, 0, 0.15);
-            color: rgb(144 238 144);  /* Lighter for visibility */
+            background: rgba(0, 50, 0, 0.15); /* success-900 */
+            color: rgb(0 50 0);
             border-left: 2px solid rgb(0 50 0);
         }
 
@@ -1340,9 +1406,9 @@ function Export-HtmlReport {
             border-left: 2px solid rgb(224 110 146);
         }
         .diff-line.diff-del.shade-500 {
-            background: rgba(253, 151, 31, 0.15);
-            color: rgb(253 151 31);
-            border-left: 2px solid rgb(253 151 31);
+            background: rgba(213, 0, 109, 0.15); /* error-500 */
+            color: rgb(213 0 109);
+            border-left: 2px solid rgb(213 0 109);
         }
         .diff-line.diff-del.shade-600 {
             background: rgba(215, 61, 133, 0.15);
@@ -1366,15 +1432,80 @@ function Export-HtmlReport {
         }
     </style>
     <script>
+        function setViewMode(btn, mode, versionId) {
+            // Find the parent version container
+            const versionContainer = document.getElementById('version_' + versionId);
+            if (!versionContainer) return;
+
+            // Find all buttons in this version's button group
+            const buttonContainer = versionContainer.querySelector('.view-buttons');
+            const buttons = buttonContainer.querySelectorAll('.toggle-btn');
+
+            // Remove active class from all buttons
+            buttons.forEach(b => b.classList.remove('active'));
+
+            // Add active class to clicked button
+            btn.classList.add('active');
+
+            // Hide all content areas
+            const codeContent = versionContainer.querySelector('.code-content');
+            const diffContainer = versionContainer.querySelector('.diff-container');
+
+            // Compressed content has a specific ID pattern
+            const chainIndex = versionId.split('_')[0];
+            const compressedContent = document.getElementById('compressed_' + chainIndex);
+
+            if (codeContent) codeContent.classList.add('collapsed');
+            if (diffContainer) diffContainer.classList.remove('active');
+            if (compressedContent) compressedContent.classList.add('collapsed');
+
+            // Show the selected content
+            if (mode === 'code' && codeContent) {
+                codeContent.classList.remove('collapsed');
+                addCopyButton(codeContent);
+            } else if (mode === 'diff' && diffContainer) {
+                // Generate diff if needed
+                const currentId = btn.getAttribute('data-current');
+                const previousId = btn.getAttribute('data-previous');
+                const currentTitle = btn.getAttribute('data-current-title');
+                const prevTitle = btn.getAttribute('data-prev-title');
+                const diffId = btn.getAttribute('data-diff-id');
+
+                if (currentId && previousId && diffId) {
+                    showDiff(currentId, previousId, currentTitle, prevTitle, diffId);
+                }
+
+                diffContainer.classList.add('active');
+                // Add copy buttons to diff panels if not already present
+                const diffPanels = diffContainer.querySelectorAll('.diff-content');
+                diffPanels.forEach(panel => {
+                    if (!panel.querySelector('.copy-btn')) {
+                        const copyBtn = document.createElement('button');
+                        copyBtn.className = 'copy-btn';
+                        copyBtn.textContent = 'Copy';
+                        copyBtn.style.position = 'fixed';
+                        copyBtn.style.bottom = '20px';
+                        copyBtn.style.right = '20px';
+                        copyBtn.onclick = function() { copyToClipboard(panel); };
+                        panel.appendChild(copyBtn);
+                    }
+                });
+            } else if (mode === 'compressed' && compressedContent) {
+                compressedContent.classList.remove('collapsed');
+                addCopyButton(compressedContent);
+            }
+        }
+
+        // Legacy function for backward compatibility
         function toggleCode(btn, targetId) {
             const content = document.getElementById(targetId);
             if (content.classList.contains('collapsed')) {
                 content.classList.remove('collapsed');
-                btn.textContent = 'Hide Code';
+                btn.textContent = 'Hide';
                 addCopyButton(content);
             } else {
                 content.classList.add('collapsed');
-                btn.textContent = 'Show Code';
+                btn.textContent = 'Show';
             }
         }
         
@@ -1440,31 +1571,6 @@ function Export-HtmlReport {
             });
         }
         
-        function toggleDiff(btn, targetId) {
-            const content = document.getElementById(targetId);
-            if (content.classList.contains('active')) {
-                content.classList.remove('active');
-                btn.textContent = 'Show Diff';
-            } else {
-                content.classList.add('active');
-                btn.textContent = 'Hide Diff';
-                // Add copy buttons to diff panels if not already present
-                const diffPanels = content.querySelectorAll('.diff-content');
-                diffPanels.forEach(panel => {
-                    if (!panel.querySelector('.copy-btn')) {
-                        const copyBtn = document.createElement('button');
-                        copyBtn.className = 'copy-btn';
-                        copyBtn.textContent = 'Copy';
-                        copyBtn.style.position = 'fixed';
-                        copyBtn.style.zIndex = '1000';
-                        copyBtn.onclick = function() {
-                            copyDiffContent(panel);
-                        };
-                        panel.appendChild(copyBtn);
-                    }
-                });
-            }
-        }
         
         function copyDiffContent(panel) {
             const copyBtn = panel.querySelector('.copy-btn');
@@ -1767,38 +1873,47 @@ function Export-HtmlReport {
             $diffId = "diff_$chainIndex`_$versionIndex"
             $escapedContent = [System.Web.HttpUtility]::HtmlEncode($version.Content)
             
+            # Create unique version container ID
+            $versionContainerId = "${chainIndex}_${versionIndex}"
+
             $html += @"
-            <div class="version">
+            <div class="version" id="version_$versionContainerId">
                 <div class="version-header">
                     <div class="version-info">
                         <span class="version-date">$($version.Date.ToString('yyyy-MM-dd HH:mm'))</span>
-                        by $($version.Author) | 
-                        Commit: $($version.Commit.Substring(0,8)) | 
+                        by $($version.Author) |
+                        Commit: $($version.Commit.Substring(0,8)) |
                         Lines: $($version.StartLine)-$($version.EndLine) ($($version.LineCount) lines)
                     </div>
-                    <div>
-                        <button class="toggle-btn" onclick="toggleCode(this, '$codeId')">Show Code</button>
+                    <div class="view-buttons">
+                        <button class="toggle-btn code-btn" onclick="setViewMode(this, 'code', '$versionContainerId')">Code</button>
 "@
-            
+
             # Add diff button for versions that have a previous version
             if ($versionIndex -gt 0) {
                 $prevCodeId = "code_$chainIndex`_$($versionIndex-1)"
                 $prevVersion = $chain.Versions[$versionIndex-1]
                 $currentTitle = "Current ($($version.Date.ToString('MM-dd HH:mm')))"
                 $prevTitle = "Previous ($($prevVersion.Date.ToString('MM-dd HH:mm')))"
-                
+
                 $html += @"
-                        <button class="toggle-btn diff-btn" onclick="showDiff('$codeId', '$prevCodeId', '$currentTitle', '$prevTitle', '$diffId'); toggleDiff(this, '$diffId')">Show Diff</button>
+                        <button class="toggle-btn diff-btn"
+                            onclick="setViewMode(this, 'diff', '$versionContainerId')"
+                            data-current="$codeId"
+                            data-previous="$prevCodeId"
+                            data-current-title="$currentTitle"
+                            data-prev-title="$prevTitle"
+                            data-diff-id="$diffId">Diff</button>
 "@
             }
             # Add compressed diff button for the first (most recent) version
             elseif ($versionIndex -eq 0 -and $chain.Versions.Count -gt 1) {
                 $compressedDiffId = "compressed_$chainIndex"
                 $html += @"
-                        <button class="compressed-diff-btn" onclick="toggleCode(this, '$compressedDiffId')">Show Compressed Diff</button>
+                        <button class="toggle-btn compressed-btn" onclick="setViewMode(this, 'compressed', '$versionContainerId')">Compressed</button>
 "@
             }
-            
+
             $html += @"
                     </div>
                 </div>
@@ -2089,6 +2204,12 @@ function Main {
         }
         
         Write-Host "Found $($fileVersions.Count) file versions" -ForegroundColor Green
+    if ($VerbosePreference -eq 'Continue' -and $fileVersions.Count -gt 0) {
+        Write-Verbose "Version summary by file:"
+        $fileVersions | Group-Object { $_.File } | ForEach-Object {
+            Write-Verbose "  $($_.Name): $($_.Count) versions"
+        }
+    }
         
         # Step 2: Parse with Acorn
         Write-Host "`nStep 2: Parsing code with language auto-detection..." -ForegroundColor Yellow

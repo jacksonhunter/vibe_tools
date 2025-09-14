@@ -134,6 +134,31 @@ Git shows file-level diffs which can be overwhelming when tracking specific func
   - Detects constants (UPPER_CASE), global assignments (`<<-`, `assign()`)
   - Note: R AST uses `lhs`/`rhs` fields for binary operators
 
+### Recent Updates (September 2025)
+
+#### Radio Group View Buttons
+The HTML report now features radio-style view switching:
+- **Code**, **Diff**, and **Compressed** buttons act as a radio group
+- Only one view can be active at a time
+- Visual feedback with distinct colors:
+  - Code: Electric yellow (rgb(255 204 0))
+  - Diff: Electric cyan (rgb(0 255 255))
+  - Compressed: Electric pink (rgb(255 20 147))
+
+#### Shade-based Commit Differentiation
+Compressed diffs use tailwind-inspired shade variations to distinguish commits:
+- Each commit gets a unique shade (100-900 scale)
+- Additions use NeonSurge success spectrum colors
+- Deletions use NeonSurge error spectrum colors
+- Hover tooltips show commit metadata (hash, message, author, date)
+- Electric yellow hover effect for enhanced visibility
+
+#### Enhanced Features
+- **Path normalization**: Handles Windows paths with backslashes correctly
+- **Verbose mode improvements**: More detailed debugging output
+- **Double-spacing fix**: Removed unnecessary newlines in HTML generation
+- **R language support**: Full support for R6, S3, S4 classes and methods
+
 ### Technical Requirements
 
 - **web-tree-sitter**: Version 0.25.x required (supports language version 15)
