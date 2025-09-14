@@ -111,8 +111,9 @@ Git shows file-level diffs which can be overwhelming when tracking specific func
 ### Important Windows/Unix Interoperability Notes
 
 - **BOM (Byte Order Mark) Issue**: When PowerShell writes UTF-8 files, it adds a BOM by default which breaks JSON parsing in Node.js. Always use `New-Object System.Text.UTF8Encoding $false` to write without BOM when passing files between PowerShell and Node.js.
-- **File Extension Preservation**: The parser uses file extensions to auto-detect language. Temp files must preserve original extensions (e.g., `.ps1`, `.py`, `.sh`) for correct language detection.
+- **File Extension Preservation**: The parser uses file extensions to auto-detect language. Temp files must preserve original extensions (e.g., `.ps1`, `.py`, `.sh`, `.r`, `.R`) for correct language detection.
 - **JSON Argument Passing**: Due to PowerShell quote escaping issues, complex JSON is passed via temp files using `@filename` syntax rather than command-line arguments.
+- **R Grammar Field Names**: The R grammar uses `lhs`/`rhs` for binary operators instead of `left`/`right` used by other grammars.
 
 ### Parser Implementation Status (Updated September 2025)
 
@@ -126,6 +127,12 @@ Git shows file-level diffs which can be overwhelming when tracking specific func
 - **PowerShell**: ✅ Full support via web-tree-sitter WASM (language version 15)
   - Built from Airbus-CERT/tree-sitter-powershell
   - Successfully extracts functions, classes, and methods
+- **R**: ✅ Full support via web-tree-sitter WASM (language version 15)
+  - Built from r-lib/tree-sitter-r (latest)
+  - Supports R6 classes (`R6::R6Class()`), S3 classes (`class() <-`), S4 classes (`setClass()`)
+  - Extracts functions (`name <- function()`), methods (`setMethod()`, `UseMethod()`)
+  - Detects constants (UPPER_CASE), global assignments (`<<-`, `assign()`)
+  - Note: R AST uses `lhs`/`rhs` fields for binary operators
 
 ### Technical Requirements
 
@@ -179,7 +186,13 @@ cd tree-sitter-powershell
 # Note: PowerShell uses lowercase in the export function name
 emcc src/parser.c src/scanner.c -o tree-sitter-powershell.wasm -I./src -Os -fPIC -s WASM=1 -s SIDE_MODULE=2 -s EXPORTED_FUNCTIONS="['_tree_sitter_powershell']"
 
-# 7. Copy all WASM files to grammars directory
+# 7. Build R Grammar
+git clone https://github.com/r-lib/tree-sitter-r
+cd tree-sitter-r
+/c/nvm4w/nodejs/npx tree-sitter generate
+emcc src/parser.c src/scanner.c -o tree-sitter-r.wasm -I./src -Os -fPIC -s WASM=1 -s SIDE_MODULE=2 -s EXPORTED_FUNCTIONS="['_tree_sitter_r']"
+
+# 8. Copy all WASM files to grammars directory
 cp *.wasm ../code_evolver/grammars/
 ```
 

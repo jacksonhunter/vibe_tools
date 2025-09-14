@@ -1,54 +1,109 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Track code evolution using your existing Acorn-based parsing logic
+    Track code evolution across Git history with multi-language support and visual diff reporting
 
 .DESCRIPTION
-    This script combines PowerShell Git integration with your exact Acorn-based
-    JavaScript parser for accurate code segment extraction and evolution tracking.
+    This script analyzes code evolution through Git history using web-tree-sitter WASM parsers
+    for accurate AST-based code extraction. Supports multiple languages (JavaScript, TypeScript,
+    Python, Bash, PowerShell) with automatic language detection. Features enhanced compressed
+    diff visualization using NeonSurge theme with intelligent shade-based commit differentiation.
 
 .PARAMETER BaseClass
-    Name of the base class to track inheritance from
+    Name of the base class to track inheritance from (e.g., "BaseService", "Component")
 
 .PARAMETER ClassName
-    Specific class name to track
+    Specific class name to track evolution of (e.g., "UserService", "LoginForm")
+
+.PARAMETER FunctionName
+    Track evolution of a specific function or method (e.g., "processData", "handleClick")
+
+.PARAMETER Globals
+    Track global variable assignments and window/globalThis properties
+
+.PARAMETER Exports
+    Track module exports (ES6 exports, module.exports, exports.*)
 
 .PARAMETER FilePath
-    Specific file to analyze (optional)
+    Filter analysis to specific file(s). Supports wildcards (e.g., "src/*.js", "**/services/*.ts")
 
 .PARAMETER OutputDir
     Directory to store analysis results (default: ./code-evolution-analysis)
 
-.PARAMETER ShowDiffs
-    Display evolution diffs in console
-
-.PARAMETER ExportHtml
-    Export results to HTML report
-
-.PARAMETER ExportUnifiedDiff
-    Export results to unified diff text format for analysis
-
-.PARAMETER ExportCompressedDiff
-    Export compressed diff showing all changes inline with final version
+.PARAMETER ConfigDir
+    Directory containing language configuration files (default: ./config)
 
 .PARAMETER Parser
-    Parser file to use for code analysis (default: javascript-parser.js)
-    Must be a .js file in the lib/parsers/ directory
+    Parser to use for code analysis (default: tree-sitter-parser.js)
+    Supports: tree-sitter-parser.js (auto-detects language), javascript-parser.js (Acorn fallback)
+
+.PARAMETER ShowDiffs
+    Display evolution diffs in console output
+
+.PARAMETER ExportHtml
+    Export results to interactive HTML report with NeonSurge theme
+
+.PARAMETER ExportUnifiedDiff
+    Export results to unified diff text format for LLM analysis
+
+.PARAMETER ExportCompressedDiff
+    Export compressed diff showing all changes inline with final version.
+    Features intelligent shade-based commit coloring (shade 500 default, expanding
+    range for multiple commits) and enhanced hover tooltips with commit metadata.
 
 .PARAMETER Verbose
     Show detailed progress messages during execution
 
 .EXAMPLE
     .\Track-CodeEvolution.ps1 -BaseClass "BaseService" -ShowDiffs
+    # Track all classes extending BaseService
 
 .EXAMPLE
-    .\Track-CodeEvolution.ps1 -ClassName "UserService" -FilePath "src/UserService.js" -ExportHtml
+    .\Track-CodeEvolution.ps1 -ClassName "UserService" -FilePath "src/services/*.js" -ExportHtml
+    # Track UserService class in service files, export HTML report
 
 .EXAMPLE
-    .\Track-CodeEvolution.ps1 -ClassName "MyClass" -ExportUnifiedDiff -ExportCompressedDiff
+    .\Track-CodeEvolution.ps1 -FunctionName "handleRequest" -ExportCompressedDiff
+    # Track handleRequest function evolution with compressed diff
 
 .EXAMPLE
-    .\Track-CodeEvolution.ps1 -ClassName "MyClass" -Parser "tree-sitter-parser.js" -FilePath "src/my_class.py"
+    .\Track-CodeEvolution.ps1 -FilePath "src/utils.py" -Parser "tree-sitter-parser.js" -ExportHtml
+    # Analyze Python file with auto-detection, export HTML
+
+.EXAMPLE
+    .\Track-CodeEvolution.ps1 -Exports -FilePath "lib/*.js" -ExportUnifiedDiff
+    # Track all exports in library files
+
+.EXAMPLE
+    .\Track-CodeEvolution.ps1 -ClassName "DataProcessor" -FilePath "R/*.R" -ExportHtml
+    # Track R6/S3/S4 class evolution in R files
+
+.NOTES
+    Supported Languages:
+    - JavaScript/TypeScript (.js, .jsx, .ts, .tsx, .mjs, .cjs)
+    - Python (.py, .pyw)
+    - Bash (.sh, .bash)
+    - PowerShell (.ps1, .psm1, .psd1)
+    - R (.r, .R) - Supports R6, S3, S4 classes and methods
+
+    Requirements:
+    - Git repository
+    - Node.js installed
+    - web-tree-sitter (auto-installed on first run)
+
+    Output Files:
+    - evolution-report.html: Interactive visual report with commit shading
+    - evolution-unified-diff.txt: Traditional chronological diffs
+    - evolution-compressed-diff.txt: Inline changes with final code
+    - evolution-timeline.json: Raw evolution data
+
+    Shade Calculation for Commits:
+    - 1 commit: shade 500 (default)
+    - 2 commits: shades 400, 600
+    - 3 commits: shades 400, 500, 600
+    - 4-5 commits: expands to 300-700 range
+    - 6-8 commits: expands to 200-800 range
+    - 9+ commits: uses full 100-900 range
 #>
 
 param(
@@ -256,6 +311,7 @@ function Get-LanguageConfiguration {
                 }
             break
         }
+        $commitIndex++  # Increment for next commit pair
     }
     
     if (-not $detectedLanguage) {
@@ -274,6 +330,7 @@ function Get-LanguageConfiguration {
             "r-parser" { "r" }
             default { "javascript" }
         }
+        $commitIndex++  # Increment for next commit pair
     }
     
     return @{
@@ -442,6 +499,7 @@ function Get-GitFileVersions {
                 $results += $versionInfo
             }
         }
+        $commitIndex++  # Increment for next commit pair
     }
     
     return $results
@@ -537,6 +595,7 @@ function Parse-FileVersions {
         } catch {
             Write-Warning "Failed to parse $($version.TempFilePath): $($_.Exception.Message)"
         }
+        $commitIndex++  # Increment for next commit pair
     }
     
     return $parsedVersions
@@ -569,23 +628,66 @@ function Build-EvolutionTimeline {
             }
             $allSegments += $segmentData
         }
+        $commitIndex++  # Increment for next commit pair
     }
     
     # Group by name and type to create evolution chains
     $evolutionChains = $allSegments | Group-Object -Property Name,Type | ForEach-Object {
-        $timeline = $_.Group | Sort-Object Date -Descending  # Most recent first
-        
-        [PSCustomObject]@{
-            Name = $timeline[0].Name
-            Type = $timeline[0].Type
-            File = $timeline[0].File
-            Versions = $timeline
-            VersionCount = $timeline.Count
-            FirstSeen = ($timeline | Sort-Object Date)[0].Date
-            LastModified = $timeline[0].Date
-            Changes = Get-EvolutionChanges -Timeline $timeline
+        $allVersions = $_.Group | Sort-Object Date  # Chronological order for comparison
+
+        # Filter for versions with actual content differences
+        $meaningfulVersions = @()
+        $lastVersion = $null
+
+        foreach ($version in $allVersions) {
+            if ($lastVersion -eq $null) {
+                # Always include first version
+                $meaningfulVersions += $version
+                $lastVersion = $version
+            } else {
+                # Compare content using git diff with whitespace ignore
+                $tempFrom = [System.IO.Path]::GetTempFileName()
+                $tempTo = [System.IO.Path]::GetTempFileName()
+
+                try {
+                    $lastVersion.Content | Set-Content $tempFrom -Encoding UTF8
+                    $version.Content | Set-Content $tempTo -Encoding UTF8
+
+                    # Capture the full diff output for later use
+                    $diffOutput = & git diff --no-index --unified=0 --ignore-all-space --ignore-blank-lines $tempFrom $tempTo 2>$null
+
+                    if ($LASTEXITCODE -ne 0) {
+                        # Diff found differences - include this version and store diff data
+                        $version | Add-Member -MemberType NoteProperty -Name "DiffFromPrevious" -Value $diffOutput
+                        $version | Add-Member -MemberType NoteProperty -Name "PreviousVersion" -Value $lastVersion
+                        $meaningfulVersions += $version
+                        $lastVersion = $version
+                    }
+                } finally {
+                    Remove-Item -Path $tempFrom -ErrorAction SilentlyContinue
+                    Remove-Item -Path $tempTo -ErrorAction SilentlyContinue
+                }
+            }
         }
-    }
+
+        # Only create chain if we have meaningful versions
+        if ($meaningfulVersions.Count -gt 0) {
+            $timeline = $meaningfulVersions | Sort-Object Date -Descending  # Most recent first
+
+            [PSCustomObject]@{
+                Name = $timeline[0].Name
+                Type = $timeline[0].Type
+                File = $timeline[0].File
+                Versions = $timeline
+                VersionCount = $timeline.Count
+                FirstSeen = ($timeline | Sort-Object Date)[0].Date
+                LastModified = $timeline[0].Date
+                Changes = Get-EvolutionChanges -Timeline $timeline
+                OriginalVersionCount = $allVersions.Count
+            }
+        }
+        $commitIndex++  # Increment for next commit pair
+    } | Where-Object { $_ -ne $null }
     
     # Save evolution data
     $evolutionFile = Join-Path $OutputDir "evolution-timeline.json"
@@ -726,32 +828,21 @@ function Get-CompressedDiffText {
     $allHeaders = @()
     $changesByLine = @{}  # Hash table to store changes by line number
 
-    # Process each version transition
-    for ($i = 1; $i -lt $chronologicalVersions.Count; $i++) {
-        $prevVersion = $chronologicalVersions[$i-1]
-        $currVersion = $chronologicalVersions[$i]
-
-        $fromCommit = $prevVersion.Commit.Substring(0, 7)
-        $toCommit = $currVersion.Commit.Substring(0, 7)
+    # Process each version that has cached diff data
+    $commitIndex = 0
+    foreach ($version in $chronologicalVersions | Where-Object { $_.DiffFromPrevious }) {
+        $fromCommit = $version.PreviousVersion.Commit.Substring(0, 7)
+        $toCommit = $version.Commit.Substring(0, 7)
         $allHeaders += "@@@ $fromCommit → $toCommit @@@"
 
-        # Create temp files for git diff
-        $tempFrom = [System.IO.Path]::GetTempFileName()
-        $tempTo = [System.IO.Path]::GetTempFileName()
+        # Use the cached diff output instead of running git diff again
+        $diffOutput = $version.DiffFromPrevious
 
-        try {
-            $prevVersion.Content | Set-Content $tempFrom -Encoding UTF8
-            $currVersion.Content | Set-Content $tempTo -Encoding UTF8
+        # Parse the cached diff output
+        $currentOldLine = 0
+        $currentNewLine = 0
 
-            # Generate zero-context diff using git
-            $diffOutput = & git diff --no-index --unified=0 $tempFrom $tempTo 2>$null
-
-            if ($LASTEXITCODE -ne 0) {
-                # Parse the diff output
-                $currentOldLine = 0
-                $currentNewLine = 0
-
-                foreach ($line in $diffOutput) {
+        foreach ($line in $diffOutput) {
                     # Parse hunk header: @@ -401,0 +402,5 @@
                     if ($line -match '^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@') {
                         $oldStart = [int]$matches[1]
@@ -771,7 +862,12 @@ function Get-CompressedDiffText {
                         $changesByLine[$currentOldLine] += @{
                             Type = 'delete'
                             Content = $content
-                            Commit = $fromCommit
+                            FromCommit = $fromCommit
+                            ToCommit = $toCommit
+                            CommitMessage = $commitMessage
+                            CommitAuthor = $commitAuthor
+                            CommitDate = $commitDate
+                            ShadeValue = $shadeValue
                             Line = $currentOldLine
                         }
                         $currentOldLine++
@@ -785,18 +881,18 @@ function Get-CompressedDiffText {
                         $changesByLine[$currentNewLine] += @{
                             Type = 'add'
                             Content = $content
-                            Commit = $toCommit
+                            FromCommit = $fromCommit
+                            ToCommit = $toCommit
+                            CommitMessage = $commitMessage
+                            CommitAuthor = $commitAuthor
+                            CommitDate = $commitDate
+                            ShadeValue = $shadeValue
                             Line = $currentNewLine
                         }
                         $currentNewLine++
                     }
-                }
-            }
         }
-        finally {
-            Remove-Item $tempFrom -Force -ErrorAction SilentlyContinue
-            Remove-Item $tempTo -Force -ErrorAction SilentlyContinue
-        }
+        $commitIndex++  # Increment for next commit pair
     }
 
     # Build the compressed output as plain text
@@ -830,6 +926,7 @@ function Get-CompressedDiffText {
         if ($lineNum -le $finalLines.Count) {
             $output += "    $($finalLines[$lineNum - 1])`n"
         }
+        $commitIndex++  # Increment for next commit pair
     }
 
     return $output
@@ -851,32 +948,69 @@ function Get-CompressedDiff {
     $allHeaders = @()
     $changesByLine = @{}  # Hash table to store changes by line number
 
-    # Process each version transition
-    for ($i = 1; $i -lt $chronologicalVersions.Count; $i++) {
-        $prevVersion = $chronologicalVersions[$i-1]
-        $currVersion = $chronologicalVersions[$i]
+    # Calculate total unique commits for shade mapping
+    $totalCommits = ($chronologicalVersions | Where-Object { $_.DiffFromPrevious }).Count
 
-        $fromCommit = $prevVersion.Commit.Substring(0, 7)
-        $toCommit = $currVersion.Commit.Substring(0, 7)
+    # Function to calculate shade value based on commit index and total commits
+    function Get-ShadeValue {
+        param(
+            [int]$CommitIndex,
+            [int]$TotalCommits
+        )
+
+        $shades = @(100, 200, 300, 400, 500, 600, 700, 800, 900)
+
+        if ($TotalCommits -eq 1) {
+            return 500  # Single commit uses default shade
+        }
+        elseif ($TotalCommits -eq 2) {
+            return @(400, 600)[$CommitIndex]
+        }
+        elseif ($TotalCommits -eq 3) {
+            return @(400, 500, 600)[$CommitIndex]
+        }
+        elseif ($TotalCommits -eq 4) {
+            return @(300, 400, 600, 700)[$CommitIndex]
+        }
+        elseif ($TotalCommits -eq 5) {
+            return @(300, 400, 500, 600, 700)[$CommitIndex]
+        }
+        elseif ($TotalCommits -eq 6) {
+            return @(200, 300, 400, 600, 700, 800)[$CommitIndex]
+        }
+        elseif ($TotalCommits -eq 7) {
+            return @(200, 300, 400, 500, 600, 700, 800)[$CommitIndex]
+        }
+        elseif ($TotalCommits -eq 8) {
+            return @(200, 300, 400, 500, 600, 700, 800, 900)[$CommitIndex]
+        }
+        else {
+            # For 9+ commits, use all shades
+            $shadeIndex = [Math]::Min($CommitIndex, 8)
+            return $shades[$shadeIndex]
+        }
+    }
+
+    # Process each version that has cached diff data
+    $commitIndex = 0
+    foreach ($version in $chronologicalVersions | Where-Object { $_.DiffFromPrevious }) {
+        $fromCommit = $version.PreviousVersion.Commit.Substring(0, 7)
+        $toCommit = $version.Commit.Substring(0, 7)
+        $commitMessage = $version.Message
+        $commitAuthor = $version.Author
+        $commitDate = $version.Date.ToString('yyyy-MM-dd HH:mm')
+        $shadeValue = Get-ShadeValue -CommitIndex $commitIndex -TotalCommits $totalCommits
+
         $allHeaders += "@@@ $fromCommit → $toCommit @@@"
 
-        # Create temp files for git diff
-        $tempFrom = [System.IO.Path]::GetTempFileName()
-        $tempTo = [System.IO.Path]::GetTempFileName()
+        # Use the cached diff output instead of running git diff again
+        $diffOutput = $version.DiffFromPrevious
 
-        try {
-            $prevVersion.Content | Set-Content $tempFrom -Encoding UTF8
-            $currVersion.Content | Set-Content $tempTo -Encoding UTF8
+        # Parse the cached diff output
+        $currentOldLine = 0
+        $currentNewLine = 0
 
-            # Generate zero-context diff using git
-            $diffOutput = & git diff --no-index --unified=0 $tempFrom $tempTo 2>$null
-
-            if ($LASTEXITCODE -ne 0) {
-                # Parse the diff output
-                $currentOldLine = 0
-                $currentNewLine = 0
-
-                foreach ($line in $diffOutput) {
+        foreach ($line in $diffOutput) {
                     # Parse hunk header: @@ -401,0 +402,5 @@
                     if ($line -match '^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@') {
                         $oldStart = [int]$matches[1]
@@ -896,7 +1030,12 @@ function Get-CompressedDiff {
                         $changesByLine[$currentOldLine] += @{
                             Type = 'delete'
                             Content = $content
-                            Commit = $fromCommit
+                            FromCommit = $fromCommit
+                            ToCommit = $toCommit
+                            CommitMessage = $commitMessage
+                            CommitAuthor = $commitAuthor
+                            CommitDate = $commitDate
+                            ShadeValue = $shadeValue
                             Line = $currentOldLine
                         }
                         $currentOldLine++
@@ -910,18 +1049,18 @@ function Get-CompressedDiff {
                         $changesByLine[$currentNewLine] += @{
                             Type = 'add'
                             Content = $content
-                            Commit = $toCommit
+                            FromCommit = $fromCommit
+                            ToCommit = $toCommit
+                            CommitMessage = $commitMessage
+                            CommitAuthor = $commitAuthor
+                            CommitDate = $commitDate
+                            ShadeValue = $shadeValue
                             Line = $currentNewLine
                         }
                         $currentNewLine++
                     }
-                }
-            }
         }
-        finally {
-            Remove-Item $tempFrom -Force -ErrorAction SilentlyContinue
-            Remove-Item $tempTo -Force -ErrorAction SilentlyContinue
-        }
+        $commitIndex++  # Increment for next commit pair
     }
 
     # Build the compressed output
@@ -937,26 +1076,31 @@ function Get-CompressedDiff {
     $finalLines = $finalContent -split "`n"
 
     # Output the final content with all changes inline
-    $output += "<div style='margin-top: 10px; padding: 10px; background: rgb(0 0 0); border: 1px solid rgb(0 63 103); border-radius: 4px;'>`n" <# ##NeonSurge --bg-primary --border-subtle #>
+    $output += "<div class='compressed-content' style='margin-top: 10px; padding: 10px; background: rgb(0 0 0); border: 1px solid rgb(0 63 103); border-radius: 4px;'>`n" <# ##NeonSurge --bg-primary --border-subtle #>
 
     for ($lineNum = 1; $lineNum -le $finalLines.Count; $lineNum++) {
         # First, show any changes for this line
         if ($changesByLine.ContainsKey($lineNum)) {
             foreach ($change in $changesByLine[$lineNum]) {
                 $escapedContent = [System.Web.HttpUtility]::HtmlEncode($change.Content)
+                $shadeClass = "shade-$($change.ShadeValue)"
+                # Create safe tooltip text
+                $safeMessage = $change.CommitMessage -replace '"', '&quot;' -replace "'", '&apos;'
+                $tooltipText = "$($change.ToCommit): $safeMessage by $($change.CommitAuthor) at $($change.CommitDate)"
+
                 if ($change.Type -eq 'delete') {
-                    $output += "<div class='diff-line diff-del'>L$lineNum`: - $escapedContent</div>`n"
+                    $output += "<div class='diff-line diff-del $shadeClass' title='$tooltipText'><span class='line-num'>L$lineNum</span>: - $escapedContent</div>`n"
                 }
                 else {
-                    $output += "<div class='diff-line diff-add'>L$lineNum`: + $escapedContent</div>`n"
+                    $output += "<div class='diff-line diff-add $shadeClass' title='$tooltipText'><span class='line-num'>L$lineNum</span>: + $escapedContent</div>`n"
                 }
             }
         }
 
-        # Then show the current line (if it exists in final version)
+        # Then show the current line (if it exists in final version) with line number
         if ($lineNum -le $finalLines.Count) {
             $escapedLine = [System.Web.HttpUtility]::HtmlEncode($finalLines[$lineNum - 1])
-            $output += "<div class='diff-line unchanged'>$escapedLine</div>`n"
+            $output += "<div class='diff-line unchanged'><span class='line-num-unchanged'>$lineNum</span> $escapedLine</div>`n"
         }
     }
 
@@ -1093,28 +1237,132 @@ function Export-HtmlReport {
             border-left: 3px solid rgb(255 20 147);
             font-size: 12px;
         }
-        .diff-line.diff-del {
-            background: rgba(255, 20, 147, 0.15); /*##NeonSurge --primary-500 */
-            color: rgb(255 20 147);
-            border-left: 2px solid rgb(255 20 147);
-            padding: 0 8px; /* Tighter vertical spacing */
+
+        /* Base compressed diff line styles - fixed spacing */
+        .compressed-content .diff-line {
+            display: block;
             margin: 0;
-            line-height: 1.4; /* Consistent line height */
+            padding: 0 8px;
+            line-height: 1.2;  /* Tight line height to prevent double spacing */
+            font-family: 'Consolas', monospace;
+            white-space: pre;
         }
-        .diff-line.diff-add {
-            background: rgba(0, 255, 127, 0.15); /*##NeonSurge --success-200 */
-            color: rgb(0 255 127);
-            border-left: 2px solid rgb(0 255 127);
-            padding: 0 8px; /* Tighter vertical spacing */
-            margin: 0;
-            line-height: 1.4; /* Consistent line height */
-        }
-        .diff-line.unchanged {
+
+        .compressed-content .diff-line.unchanged {
             color: rgb(255 255 255); /*##NeonSurge --text-primary */
             opacity: 0.7;
-            padding: 0 8px; /* Tighter vertical spacing */
-            margin: 0;
-            line-height: 1.4; /* Consistent line height */
+        }
+
+        /* Line number styling */
+        .compressed-content .line-num,
+        .compressed-content .line-num-unchanged {
+            display: inline-block;
+            width: 45px;
+            text-align: right;
+            margin-right: 8px;
+            color: rgb(74 150 255);
+            opacity: 0.6;
+            font-size: 11px;
+        }
+
+        .compressed-content .diff-line.diff-add .line-num,
+        .compressed-content .diff-line.diff-del .line-num {
+            opacity: 1;
+            font-weight: bold;
+        }
+
+        /* Shade-based colors for additions using success spectrum */
+        .diff-line.diff-add.shade-100 {
+            background: rgba(152, 255, 152, 0.15);
+            color: rgb(152 255 152);
+            border-left: 2px solid rgb(152 255 152);
+        }
+        .diff-line.diff-add.shade-200 {
+            background: rgba(168, 230, 207, 0.15);
+            color: rgb(168 230 207);
+            border-left: 2px solid rgb(168 230 207);
+        }
+        .diff-line.diff-add.shade-300 {
+            background: rgba(0, 255, 127, 0.15);
+            color: rgb(0 255 127);
+            border-left: 2px solid rgb(0 255 127);
+        }
+        .diff-line.diff-add.shade-400 {
+            background: rgba(50, 205, 50, 0.15);
+            color: rgb(50 205 50);
+            border-left: 2px solid rgb(50 205 50);
+        }
+        .diff-line.diff-add.shade-500 {
+            background: rgba(166, 226, 46, 0.15);
+            color: rgb(166 226 46);
+            border-left: 2px solid rgb(166 226 46);
+        }
+        .diff-line.diff-add.shade-600 {
+            background: rgba(32, 178, 170, 0.15);
+            color: rgb(32 178 170);
+            border-left: 2px solid rgb(32 178 170);
+        }
+        .diff-line.diff-add.shade-700 {
+            background: rgba(0, 255, 0, 0.15);
+            color: rgb(0 255 0);
+            border-left: 2px solid rgb(0 255 0);
+        }
+        .diff-line.diff-add.shade-800 {
+            background: rgba(0, 92, 0, 0.15);
+            color: rgb(124 252 0);  /* Lighter for visibility */
+            border-left: 2px solid rgb(0 92 0);
+        }
+        .diff-line.diff-add.shade-900 {
+            background: rgba(0, 50, 0, 0.15);
+            color: rgb(144 238 144);  /* Lighter for visibility */
+            border-left: 2px solid rgb(0 50 0);
+        }
+
+        /* Shade-based colors for deletions using error spectrum */
+        .diff-line.diff-del.shade-100 {
+            background: rgba(255, 111, 156, 0.15);
+            color: rgb(255 111 156);
+            border-left: 2px solid rgb(255 111 156);
+        }
+        .diff-line.diff-del.shade-200 {
+            background: rgba(255, 75, 156, 0.15);
+            color: rgb(255 75 156);
+            border-left: 2px solid rgb(255 75 156);
+        }
+        .diff-line.diff-del.shade-300 {
+            background: rgba(255, 20, 147, 0.15);
+            color: rgb(255 20 147);
+            border-left: 2px solid rgb(255 20 147);
+        }
+        .diff-line.diff-del.shade-400 {
+            background: rgba(224, 110, 146, 0.15);
+            color: rgb(224 110 146);
+            border-left: 2px solid rgb(224 110 146);
+        }
+        .diff-line.diff-del.shade-500 {
+            background: rgba(253, 151, 31, 0.15);
+            color: rgb(253 151 31);
+            border-left: 2px solid rgb(253 151 31);
+        }
+        .diff-line.diff-del.shade-600 {
+            background: rgba(215, 61, 133, 0.15);
+            color: rgb(215 61 133);
+            border-left: 2px solid rgb(215 61 133);
+        }
+        .diff-line.diff-del.shade-700 {
+            background: rgba(192, 58, 105, 0.15);
+            color: rgb(192 58 105);
+            border-left: 2px solid rgb(192 58 105);
+        }
+        .diff-line.diff-del.shade-800 {
+            background: rgba(191, 0, 72, 0.15);
+            color: rgb(191 0 72);
+            border-left: 2px solid rgb(191 0 72);
+        }
+        .diff-line.diff-del.shade-900 {
+            background: rgba(155, 0, 67, 0.15);
+            color: rgb(255 105 180);  /* Lighter for visibility */
+            border-left: 2px solid rgb(155 0 67);
         }
     </style>
     <script>
@@ -1651,6 +1899,7 @@ Timeline: $($chain.FirstSeen.ToString('yyyy-MM-dd HH:mm')) to $($chain.LastModif
             $report += $compressedDiff
             $report += "`n===============================================================================`n`n"
         }
+        $commitIndex++  # Increment for next commit pair
     }
 
     $report | Set-Content $reportPath -Encoding UTF8
@@ -1796,6 +2045,7 @@ function Get-UnifiedDiff {
                 $j++
             }
         }
+        $commitIndex++  # Increment for next commit pair
     }
     
     return $diff -join "`n"
