@@ -12,7 +12,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const Parser = require('web-tree-sitter');
+const TreeSitter = require('web-tree-sitter');
 
 let detectedSegments = [];
 let currentContext = null;
@@ -49,10 +49,10 @@ const loadedLanguages = new Map();
 async function initParser() {
   if (parserInitialized) return parser;
 
-  // web-tree-sitter 0.21: Parser is the constructor directly
   try {
-    await Parser.init();
-    parser = new Parser();
+    // web-tree-sitter requires init() first
+    await TreeSitter.Parser.init();
+    parser = new TreeSitter.Parser();
     parserInitialized = true;
   } catch (error) {
     console.error("Failed to initialize parser:", error.message);
@@ -91,7 +91,7 @@ async function loadLanguage(language) {
   }
 
   try {
-    const languageObj = await Parser.Language.load(grammarPath);
+    const languageObj = await TreeSitter.Language.load(grammarPath);
     loadedLanguages.set(language, languageObj);
     return languageObj;
   } catch (error) {
@@ -344,18 +344,11 @@ class TreeSitterExtractor {
   }
 
   processPowerShellNode(node, ancestors) {
-    // Debug: log all interesting node types for PowerShell
-    const interestingTypes = ['function_definition', 'class_definition', 'method_definition',
-                             'function_statement', 'class_statement', 'assignment_expression'];
-    if (node.text && node.text.length > 10 && node.text.includes('function') || node.text.includes('class')) {
-      console.error(`PowerShell node type: ${node.type}, text: ${node.text?.substring(0, 50)}`);
-    }
 
     switch (node.type) {
-      case 'function_definition':  // Updated from function_statement
       case 'class_statement':
       case 'class_definition':
-        const className = node.childForFieldName('name')?.text;
+        const className = node.childForFieldName('name')?.text || node.children.find(c => c.type === 'simple_name')?.text;
         const baseClass = node.childForFieldName('base_class')?.text;
         if (className) {
           addSegment(node, 'class', className, ancestors, { extends: baseClass });
@@ -363,7 +356,8 @@ class TreeSitterExtractor {
         break;
 
       case 'function_statement':
-        const functionName = node.childForFieldName('name')?.text;
+      case 'function_definition':
+        const functionName = node.childForFieldName('name')?.text || node.children[1]?.text;
         if (functionName) {
           addSegment(node, 'function', functionName, ancestors);
         }

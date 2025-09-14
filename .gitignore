@@ -21,6 +21,12 @@ Thumbs.db
 *.temp
 *.log
 
-# Test data
+# Tests
+*/test*/
 test-data/
 *.test.js
+
+# Build tools and external repos
+code_evolver/emsdk/
+code_evolver/tree-sitter-powershell/
+code_evolver/tree-sitter-PowerShell/

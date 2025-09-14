@@ -3,7 +3,9 @@
     "allow": [
       "Bash(dir examples)",
       "Bash(dir templates)",
-      "Bash(dir utils)"
+      "Bash(dir utils)",
+      "Read(//c/Users/jacks/AppData/Local/npm-cache/_logs/**)",
+      "WebSearch"
     ],
     "deny": [],
     "ask": []

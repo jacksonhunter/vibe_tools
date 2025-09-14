@@ -110,27 +110,35 @@ Git shows file-level diffs which can be overwhelming when tracking specific func
 
 ### Parser Implementation Status
 
-- **JavaScript**: ✅ Full support via web-tree-sitter or Acorn fallback
-- **Python**: ✅ Full support via web-tree-sitter WASM
-- **Bash**: ✅ Full support via web-tree-sitter WASM
-- **PowerShell**: ⚠️ Regex fallback only (tree-sitter grammar has parsing issues)
-  - WASM file built successfully but grammar returns ERROR nodes
-  - Uses regex patterns for function/class/method extraction
-  - Requires upstream grammar fixes for full tree-sitter support
+- **JavaScript**: ✅ Full support via web-tree-sitter WASM (v15) or Acorn fallback
+- **Python**: ✅ Full support via web-tree-sitter WASM (v15)
+- **Bash**: ✅ Full support via web-tree-sitter WASM (v15)
+- **PowerShell**: ✅ Full support via web-tree-sitter WASM (v15)
+  - Uses Airbus tree-sitter-powershell grammar
+  - Successfully extracts functions, classes, and methods
+  - Requires web-tree-sitter 0.25.x for language version 15 compatibility
 
-### Building PowerShell WASM (for future reference)
+### Technical Requirements
+
+- **web-tree-sitter**: Version 0.25.x required (supports language version 15)
+- **Initialization**: Uses `TreeSitter.Parser.init()` then `new TreeSitter.Parser()`
+- **WASM files**: All grammars compiled with tree-sitter CLI 0.25.x
+
+### Building PowerShell WASM
 
 ```bash
-# Clone and fix grammar
-git clone https://github.com/PowerShell/tree-sitter-PowerShell
-# Fix _braced_variable regex: /\$\{[^}]+\}/
-# Add _newline rule: $ => /\r?\n/
+# Clone working PowerShell grammar (Airbus version)
+git clone https://github.com/airbus-cert/tree-sitter-powershell
 
 # Generate parser
+cd tree-sitter-powershell
 tree-sitter generate
 
-# Build WASM with emscripten
-emcc src/parser.c src/scanner.c -o tree-sitter-powershell.wasm -I./src -Os -fPIC -s WASM=1 -s SIDE_MODULE=2 -s EXPORTED_FUNCTIONS="['_tree_sitter_PowerShell']"
+# Build WASM with emscripten (note lowercase 'powershell')
+emcc src/parser.c src/scanner.c -o tree-sitter-powershell.wasm -I./src -Os -fPIC -s WASM=1 -s SIDE_MODULE=2 -s EXPORTED_FUNCTIONS="['_tree_sitter_powershell']"
+
+# Copy to grammars directory
+copy tree-sitter-powershell.wasm ..\grammars\
 ```
 
 ## Development History
