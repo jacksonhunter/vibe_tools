@@ -54,8 +54,12 @@
 param(
     [string]$BaseClass,
     [string]$ClassName,
+    [string]$FunctionName,
+    [switch]$Globals,
+    [switch]$Exports,
     [string]$FilePath,
     [string]$OutputDir = "./code-evolution-analysis",
+    [string]$ConfigDir = "./config",
     [string]$Parser = "javascript-parser.js",  # Parser file to use
     [switch]$ShowDiffs,
     [switch]$ExportHtml,
@@ -130,10 +134,185 @@ function Setup-NodeDependencies {
     Write-Host "Dependencies installed successfully." -ForegroundColor Green
 }
 
+function Build-ExtractionContext {
+    param(
+        [hashtable]$Parameters,
+        [hashtable]$Config
+    )
+    
+    $context = @{
+        Elements = @()
+        Filters = @{}
+        Exclusions = @()
+        IncludeGuards = $false
+        IncludeIIFE = $false
+        PreserveContext = $false
+        Visibility = $null
+    }
+    
+    # Handle each parameter - they can combine
+    if ($Parameters.BaseClass) {
+        $context.Elements += "class"
+        $context.Filters.Extends = $Parameters.BaseClass
+    }
+    
+    if ($Parameters.ClassName) {
+        $context.Elements += "class"
+        $context.Filters.ClassName = $Parameters.ClassName
+    }
+    
+    if ($Parameters.FunctionName) {
+        # Include both functions AND methods, preserving class context
+        $context.Elements += @("function", "method", "arrow")
+        $context.Filters.FunctionName = $Parameters.FunctionName
+        $context.PreserveContext = $true
+    }
+    
+    if ($Parameters.Globals) {
+        $context.Elements += "global"
+        $context.IncludeGuards = $true
+        $context.IncludeIIFE = $true
+    }
+    
+    if ($Parameters.Exports) {
+        $context.Elements += "export"
+        $context.Visibility = "public"
+    }
+    
+    # Special handling for FilePath-only mode
+    if ($Parameters.FilePath -and 
+        -not ($Parameters.BaseClass -or $Parameters.ClassName -or 
+              $Parameters.FunctionName -or $Parameters.Globals -or $Parameters.Exports)) {
+        # FilePath only - extract meaningful elements without duplication
+        $context.Elements = @("class", "function", "constant")
+        $context.Exclusions = @("method", "arrow")  # Avoid duplication from classes
+        $context.ScopeFilter = "top-level"
+    }
+    
+    # No parameters at all - warn and extract everything
+    if (-not $Parameters.FilePath -and 
+        -not ($Parameters.BaseClass -or $Parameters.ClassName -or 
+              $Parameters.FunctionName -or $Parameters.Globals -or $Parameters.Exports)) {
+        Write-Warning "No filters specified - extracting all top-level elements from all files"
+        $context.Elements = @("class", "function", "constant")
+        $context.ScopeFilter = "top-level"
+    }
+    
+    # FilePath always acts as a scope limiter when present
+    if ($Parameters.FilePath) {
+        $context.ScopeToFile = $Parameters.FilePath
+    }
+    
+    # Remove duplicates from elements array
+    $context.Elements = $context.Elements | Select-Object -Unique
+    
+    return $context
+}
+
+function Get-LanguageConfiguration {
+    param(
+        [string]$ConfigDir,
+        [string]$FilePath,
+        [string]$Parser = $null
+    )
+    
+    # Load configuration files
+    $languageConfigPath = Join-Path $ConfigDir "languages.json"
+    $rulesConfigPath = Join-Path $ConfigDir "extraction-rules.json"
+    
+    # Use default configs if not found
+    if (-not (Test-Path $languageConfigPath)) {
+        Write-Verbose "Language config not found at $languageConfigPath, using defaults"
+        return Get-DefaultLanguageConfig
+    }
+    
+    if (-not (Test-Path $rulesConfigPath)) {
+        Write-Verbose "Extraction rules not found at $rulesConfigPath, using defaults"
+        return Get-DefaultExtractionRules
+    }
+    
+    $languageConfig = Get-Content $languageConfigPath | ConvertFrom-Json
+    $extractionRules = Get-Content $rulesConfigPath | ConvertFrom-Json
+    
+    # Detect language from file extension if parser not specified
+    if (-not $Parser -and $FilePath) {
+    $extension = [System.IO.Path]::GetExtension($FilePath).ToLower()
+    $detectedLanguage = $null
+    
+    foreach ($lang in $languageConfig.languages.PSObject.Properties) {
+        if ($lang.Value.extensions -contains $extension) {
+            $detectedLanguage = $lang.Name
+            Write-Verbose "Detected language: $detectedLanguage for file $FilePath"
+                
+                # Select appropriate parser based on language
+                switch ($lang.Value.parser) {
+                    "acorn" { $Parser = "javascript-parser.js" }
+                    "tree-sitter-javascript" { $Parser = "tree-sitter-parser.js" }
+                    "tree-sitter-python" { $Parser = "python-parser.js" }
+                    "tree-sitter-powershell" { $Parser = "powershell-parser.js" }
+                    "tree-sitter-bash" { $Parser = "bash-parser.js" }
+                    "tree-sitter-r" { $Parser = "r-parser.js" }
+                    default { $Parser = "javascript-parser.js" }
+                }
+            break
+        }
+    }
+    
+    if (-not $detectedLanguage) {
+        # Default to JavaScript if unknown
+        $detectedLanguage = "javascript"
+            $Parser = "javascript-parser.js"
+        Write-Verbose "Unknown extension $extension, defaulting to JavaScript"
+    }
+    } else {
+        # Try to detect language from parser name
+        $detectedLanguage = switch -Regex ($Parser) {
+            "javascript|acorn" { "javascript" }
+            "python" { "python" }
+            "powershell" { "powershell" }
+            "bash|sh" { "bash" }
+            "r-parser" { "r" }
+            default { "javascript" }
+        }
+    }
+    
+    return @{
+        Language = $detectedLanguage
+        Parser = $Parser
+        LanguageConfig = $languageConfig.languages.$detectedLanguage
+        ExtractionRules = $extractionRules.extractionRules
+    }
+}
+
+function Get-DefaultLanguageConfig {
+    # Minimal default configuration for backward compatibility
+    return @{
+        Language = "javascript"
+        LanguageConfig = @{
+            extensions = @(".js", ".jsx")
+            parser = "acorn"
+            elements = @{
+                class = @{ patterns = @("class_declaration") }
+                function = @{ patterns = @("function_declaration") }
+                method = @{ patterns = @("method_definition") }
+                constant = @{ patterns = @("const_declaration") }
+            }
+        }
+        ExtractionRules = @{
+            BaseClass = @{ requires = @("class"); filter = "extends" }
+            ClassName = @{ requires = @("class"); filter = "name" }
+            FilePath = @{ requires = @("class", "function", "constant") }
+        }
+    }
+}
+
 function Get-GitFileVersions {
     param(
         [string]$BaseClass,
         [string]$ClassName,
+        [string]$FunctionName,
+        [bool]$Globals,
+        [bool]$Exports,
         [string]$FilePath,
         [string]$OutputDir
     )
@@ -151,6 +330,30 @@ function Get-GitFileVersions {
     if ($ClassName) {
         $searchPatterns += "class $ClassName"
         $searchPatterns += "class.*$ClassName"
+    }
+    
+    if ($FunctionName) {
+        # Search for function declarations and method definitions
+        $searchPatterns += "function $FunctionName"
+        $searchPatterns += "$FunctionName\s*[:=]\s*function"
+        $searchPatterns += "$FunctionName\s*[:=]\s*\([^)]*\)\s*=>"
+        $searchPatterns += "^\s*$FunctionName\s*\([^)]*\)\s*\{"
+    }
+    
+    if ($Globals) {
+        # Search for global assignments and window/global properties
+        $searchPatterns += "window\."
+        $searchPatterns += "global\."
+        $searchPatterns += "globalThis\."
+        $searchPatterns += "^\s*var\s+"
+        $searchPatterns += "if\s*\(!window\."
+    }
+    
+    if ($Exports) {
+        # Search for export statements
+        $searchPatterns += "export\s+"
+        $searchPatterns += "module\.exports"
+        $searchPatterns += "exports\."
     }
     
     # Find relevant files
@@ -246,33 +449,73 @@ function Parse-FileVersions {
         [array]$FileVersions,
         [string]$BaseClass,
         [string]$ClassName,
-        [string]$Parser = "javascript-parser.js"
+        [string]$FunctionName,
+        [bool]$Globals,
+        [bool]$Exports,
+        [string]$Parser = "javascript-parser.js",
+        [hashtable]$Config
     )
 
     $parserPath = Join-Path $PSScriptRoot "lib\parsers\$Parser"
     $parsedVersions = @()
     
+    # Build extraction context from parameters
+    $extractionContext = Build-ExtractionContext -Parameters @{
+        BaseClass = $BaseClass
+        ClassName = $ClassName
+        FunctionName = $FunctionName
+        Globals = $Globals
+        Exports = $Exports
+        FilePath = $FileVersions[0].File  # Use first file for context
+    } -Config $Config
+    
     foreach ($version in $FileVersions) {
         Write-Verbose "Parsing $($version.File) at commit $($version.Commit.Substring(0,8))"
         
         try {
-            # Build parser arguments
+            # Build parser arguments with extraction context
             $parserArgs = @($version.TempFilePath)
             
-            if ($ClassName) {
-                $parserArgs += @("--filter-class", $ClassName)
+            # Pass extraction context as JSON
+            $contextJson = $extractionContext | ConvertTo-Json -Depth 10 -Compress
+            $parserArgs += @("--extraction-context", $contextJson)
+            
+            # Pass configuration if available
+            if ($Config) {
+                $configJson = $Config | ConvertTo-Json -Depth 10 -Compress
+                $parserArgs += @("--language-config", $configJson)
             }
             
-            if ($BaseClass) {
-                $parserArgs += @("--filter-extends", $BaseClass)
-            }
-            
-            # Run the Acorn parser
+            # Run the parser
             $parseResult = node $parserPath @parserArgs | ConvertFrom-Json
             
             if ($parseResult -and $parseResult.segments -and $parseResult.segments.Count -gt 0) {
-                $version | Add-Member -MemberType NoteProperty -Name "ParsedSegments" -Value $parseResult.segments
+                # Filter segments based on extraction rules
+                $filteredSegments = $parseResult.segments | Where-Object {
+                    $include = $true
+                    
+                    # Apply exclusions for FilePath-only mode
+                    if ($extractionContext.Exclusions -contains $_.type) {
+                        $include = $false
+                    }
+                    
+                    # Apply name filters
+                    if ($extractionContext.Filters.Name -and $_.name -ne $extractionContext.Filters.Name) {
+                        $include = $false
+                    }
+                    
+                    # Apply extends filter
+                    if ($extractionContext.Filters.Extends -and $_.extends -ne $extractionContext.Filters.Extends) {
+                        $include = $false
+                    }
+                    
+                    return $include
+                }
+                
+                if ($filteredSegments.Count -gt 0) {
+                    $version | Add-Member -MemberType NoteProperty -Name "ParsedSegments" -Value $filteredSegments
                 $parsedVersions += $version
+            }
             }
             
         } catch {
@@ -1565,53 +1808,12 @@ function Main {
     try {
         # Step 1: Find file versions in Git
         Write-Host "`nStep 1: Extracting file versions from Git history..." -ForegroundColor Yellow
-        $fileVersions = Get-GitFileVersions -BaseClass $BaseClass -ClassName $ClassName -FilePath $FilePath -OutputDir $OutputDir
-        
-        if (-not $fileVersions -or $fileVersions.Count -eq 0) {
-            Write-Warning "No matching files found in Git history."
-            return
-        }
-        
-        Write-Host "Found $($fileVersions.Count) file versions" -ForegroundColor Green
-        
-        # Step 2: Parse with Acorn
-        Write-Host "`nStep 2: Parsing with Acorn AST analysis..." -ForegroundColor Yellow
-        $parsedVersions = Parse-FileVersions -FileVersions $fileVersions -BaseClass $BaseClass -ClassName $ClassName -Parser $Parser
-        
-        Write-Host "Successfully parsed $($parsedVersions.Count) versions" -ForegroundColor Green
-        
-        # Step 3: Build evolution timeline
-        Write-Host "`nStep 3: Building evolution timeline..." -ForegroundColor Yellow
-        $evolution = Build-EvolutionTimeline -ParsedVersions $parsedVersions -OutputDir $OutputDir
-        
-        Write-Host "Tracked evolution of $($evolution.Count) code elements" -ForegroundColor Green
-        
-        # Step 4: Show results
-        Show-EvolutionResults -Evolution $evolution -ShowDiffs:$ShowDiffs
-        
-        # Step 5: Export if requested
-        if ($ExportHtml) {
-            Write-Host "`nStep 5: Exporting HTML report..." -ForegroundColor Yellow
-            Export-HtmlReport -Evolution $evolution -OutputDir $OutputDir
-        }
-        
-        if ($ExportUnifiedDiff) {
-            Write-Host "`nExporting unified diff report..." -ForegroundColor Yellow
-            Export-UnifiedDiff -Evolution $evolution -OutputDir $OutputDir
-        }
-
-        if ($ExportCompressedDiff) {
-            Write-Host "`nExporting compressed diff report..." -ForegroundColor Yellow
-            Export-CompressedDiff -Evolution $evolution -OutputDir $OutputDir
-        }
-
-        Write-Host "`nAnalysis complete! Results saved to: $OutputDir" -ForegroundColor Green
-        
-    } finally {
-        # Cleanup
-        Cleanup-TempFiles -OutputDir $OutputDir
-    }
-}
-
-# Execute main function
-Main
+        $fileVersions = Get-GitFileVersions `
+            -BaseClass $BaseClass `
+            -ClassName $ClassName `
+            -FunctionName $FunctionName `
+            -Globals $Globals `
+            -Exports $Exports `
+            -FilePath $FilePath `
+            -OutputDir $OutputDir
+ame $ClassName -FilePath $FilePath -OutputDir $OutputDir

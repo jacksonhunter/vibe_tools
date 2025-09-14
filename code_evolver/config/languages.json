@@ -1,0 +1,160 @@
+{
+  "languages": {
+    "javascript": {
+      "extensions": [".js", ".jsx", ".mjs", ".cjs"],
+      "parser": "acorn",
+      "elements": {
+        "class": {
+          "patterns": ["class_declaration"],
+          "nameField": "id.name",
+          "extendsField": "superClass.name"
+        },
+        "function": {
+          "patterns": ["function_declaration", "function_expression"],
+          "nameField": "id.name",
+          "excludeScopes": ["for", "while", "if"]
+        },
+        "arrow": {
+          "patterns": ["arrow_function"],
+          "nameField": "id.name",
+          "excludeScopes": ["for", "forEach", "map", "filter"]
+        },
+        "method": {
+          "patterns": ["method_definition"],
+          "nameField": "key.name",
+          "parentField": "parent.id.name"
+        },
+        "constant": {
+          "patterns": ["const_declaration"],
+          "nameField": "id.name",
+          "requireScope": ["module", "global"],
+          "excludePatterns": ["^i$", "^j$", "^k$", "^_", "^temp"]
+        },
+        "global": {
+          "patterns": ["window.", "global.", "globalThis.", "self."],
+          "includeGuards": true,
+          "includeIIFE": true
+        },
+        "export": {
+          "patterns": ["export_statement", "module.exports", "exports."],
+          "trackTarget": true
+        }
+      }
+    },
+    "python": {
+      "extensions": [".py"],
+      "parser": "tree-sitter-python",
+      "elements": {
+        "class": {
+          "patterns": ["class_definition"],
+          "nameField": "name",
+          "extendsField": "bases[0].id"
+        },
+        "function": {
+          "patterns": ["function_definition"],
+          "nameField": "name",
+          "excludeScopes": ["class_definition"]
+        },
+        "method": {
+          "patterns": ["function_definition"],
+          "nameField": "name",
+          "requireScope": ["class_definition"],
+          "parentField": "parent.name"
+        },
+        "constant": {
+          "patterns": ["assignment"],
+          "nameField": "targets[0].id",
+          "requireUppercase": true,
+          "requireScope": ["module"]
+        },
+        "global": {
+          "patterns": ["global_statement", "module_assignment"],
+          "includeNonLocal": true
+        },
+        "export": {
+          "patterns": ["__all__"],
+          "includePublic": true,
+          "excludePatterns": ["^_"]
+        }
+      }
+    },
+    "powershell": {
+      "extensions": [".ps1", ".psm1", ".psd1"],
+      "parser": "tree-sitter-powershell",
+      "elements": {
+        "class": {
+          "patterns": ["class_statement"],
+          "nameField": "name",
+          "extendsField": "base_class"
+        },
+        "function": {
+          "patterns": ["function_statement"],
+          "nameField": "name"
+        },
+        "method": {
+          "patterns": ["method_definition"],
+          "nameField": "name",
+          "parentField": "parent.name"
+        },
+        "constant": {
+          "patterns": ["variable_assignment"],
+          "requireReadOnly": true,
+          "nameField": "variable.name"
+        },
+        "global": {
+          "patterns": ["$script:", "$global:"],
+          "includeEnvironment": true
+        },
+        "export": {
+          "patterns": ["Export-ModuleMember"],
+          "trackTarget": true
+        }
+      }
+    },
+    "bash": {
+      "extensions": [".sh", ".bash"],
+      "parser": "tree-sitter-bash",
+      "elements": {
+        "function": {
+          "patterns": ["function_definition"],
+          "nameField": "name"
+        },
+        "constant": {
+          "patterns": ["readonly", "declare -r"],
+          "nameField": "name"
+        },
+        "global": {
+          "patterns": ["export"],
+          "includeSourced": true
+        },
+        "export": {
+          "patterns": ["export"],
+          "trackTarget": true
+        }
+      }
+    },
+    "r": {
+      "extensions": [".r", ".R"],
+      "parser": "tree-sitter-r",
+      "elements": {
+        "function": {
+          "patterns": ["function_definition", "<-function"],
+          "nameField": "name"
+        },
+        "constant": {
+          "patterns": ["assignment"],
+          "requireUppercase": true,
+          "nameField": "name"
+        },
+        "global": {
+          "patterns": ["<<-", "assign(.GlobalEnv)"],
+          "includeTopLevel": true
+        },
+        "export": {
+          "patterns": ["export"],
+          "excludePatterns": ["^\\."]
+        }
+      }
+    }
+  }
+}

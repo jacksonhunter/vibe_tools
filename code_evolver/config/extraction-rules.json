@@ -1,0 +1,84 @@
+{
+  "extractionRules": {
+    "BaseClass": {
+      "description": "Extract all classes that extend/inherit from the specified base class",
+      "requires": ["class"],
+      "filter": "extends",
+      "traverseImports": true
+    },
+    "ClassName": {
+      "description": "Extract a specific class by name",
+      "requires": ["class"],
+      "filter": "name",
+      "includeInnerClasses": false
+    },
+    "FunctionName": {
+      "description": "Extract functions and methods with the specified name",
+      "requires": ["function", "method", "arrow"],
+      "filter": "name",
+      "preserveContext": true,
+      "includeAnonymous": false
+    },
+    "Globals": {
+      "description": "Extract elements in global scope or affecting global state",
+      "requires": ["global"],
+      "includes": [
+        "globalAssignments",
+        "singletonGuards",
+        "globalFunctions",
+        "globalLiterals",
+        "iife_with_global",
+        "windowProperties",
+        "moduleExports"
+      ],
+      "excludes": ["localVariables", "parameters", "temporaries"]
+    },
+    "Exports": {
+      "description": "Extract only exported/public elements",
+      "requires": ["export"],
+      "visibility": "public",
+      "includeReExports": true
+    },
+    "FilePath": {
+      "description": "Extract all meaningful elements from a file",
+      "requires": ["class", "function", "constant"],
+      "excludes": ["method", "arrow"],
+      "deduplication": true,
+      "scopeFilter": "top-level"
+    }
+  },
+  "parameterCombinations": {
+    "BaseClass+FilePath": {
+      "description": "Classes extending BaseClass within FilePath",
+      "intersection": true
+    },
+    "ClassName+FilePath": {
+      "description": "Specific class within FilePath",
+      "intersection": true
+    },
+    "FunctionName+FilePath": {
+      "description": "Functions/methods named FunctionName within FilePath",
+      "intersection": true
+    },
+    "Globals+FilePath": {
+      "description": "Global scope elements within FilePath",
+      "intersection": true
+    },
+    "Exports+FilePath": {
+      "description": "Exported elements within FilePath",
+      "intersection": true
+    }
+  },
+  "defaultBehavior": {
+    "noParameters": {
+      "action": "extract-all-files",
+      "elements": ["class", "function", "constant"],
+      "warning": "No filters specified - extracting all top-level elements"
+    },
+    "fileOnly": {
+      "action": "extract-meaningful",
+      "elements": ["class", "function", "constant", "export"],
+      "excludeDuplicates": true
+    }
+  }
+}
