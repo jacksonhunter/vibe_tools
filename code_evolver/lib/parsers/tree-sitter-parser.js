@@ -770,14 +770,28 @@ async function main() {
   for (let i = 0; i < args.length; i += 2) {
     if (args[i] === "--extraction-context" && i + 1 < args.length) {
       try {
-        extractionContext = JSON.parse(args[i + 1]);
+        // Support reading from file if argument starts with @
+        if (args[i + 1].startsWith('@')) {
+          const contextFile = args[i + 1].substring(1);
+          const contextData = fs.readFileSync(contextFile, 'utf8');
+          extractionContext = JSON.parse(contextData);
+        } else {
+          extractionContext = JSON.parse(args[i + 1]);
+        }
       } catch (error) {
         console.error("Invalid extraction context JSON:", error.message);
         process.exit(1);
       }
     } else if (args[i] === "--language-config" && i + 1 < args.length) {
       try {
-        languageConfig = JSON.parse(args[i + 1]);
+        // Support reading from file if argument starts with @
+        if (args[i + 1].startsWith('@')) {
+          const configFile = args[i + 1].substring(1);
+          const configData = fs.readFileSync(configFile, 'utf8');
+          languageConfig = JSON.parse(configData);
+        } else {
+          languageConfig = JSON.parse(args[i + 1]);
+        }
       } catch (error) {
         console.error("Invalid language config JSON:", error.message);
         process.exit(1);

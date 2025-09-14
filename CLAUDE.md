@@ -108,6 +108,12 @@ Git shows file-level diffs which can be overwhelming when tracking specific func
 - Parser architecture supports extension to other languages via `lib/parsers/`
 - Compressed diff innovation: Shows final code once with all historical changes marked inline at their line positions (e.g., "L52: - old code" followed by "L52: + new code")
 
+### Important Windows/Unix Interoperability Notes
+
+- **BOM (Byte Order Mark) Issue**: When PowerShell writes UTF-8 files, it adds a BOM by default which breaks JSON parsing in Node.js. Always use `New-Object System.Text.UTF8Encoding $false` to write without BOM when passing files between PowerShell and Node.js.
+- **File Extension Preservation**: The parser uses file extensions to auto-detect language. Temp files must preserve original extensions (e.g., `.ps1`, `.py`, `.sh`) for correct language detection.
+- **JSON Argument Passing**: Due to PowerShell quote escaping issues, complex JSON is passed via temp files using `@filename` syntax rather than command-line arguments.
+
 ### Parser Implementation Status (Updated September 2025)
 
 - **JavaScript**: ✅ Full support via web-tree-sitter WASM (language version 15)

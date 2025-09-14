@@ -60,7 +60,7 @@ param(
     [string]$FilePath,
     [string]$OutputDir = "./code-evolution-analysis",
     [string]$ConfigDir = "./config",
-    [string]$Parser = "javascript-parser.js",  # Parser file to use
+    [string]$Parser = "tree-sitter-parser.js",  # Universal parser with auto language detection
     [switch]$ShowDiffs,
     [switch]$ExportHtml,
     [switch]$ExportUnifiedDiff,
@@ -419,9 +419,12 @@ function Get-GitFileVersions {
             }
             
             if ($matchesPattern) {
-                # Create temporary file for this version
+                # Create temporary file for this version, preserving original extension
                 $safeFileName = $file -replace '[^\w.-]', '_'
-                $tempFileName = "$safeFileName`_$($commit.Substring(0,8)).js"
+                # Extract the original extension from the file
+                $extension = [System.IO.Path]::GetExtension($file)
+                if (-not $extension) { $extension = ".txt" }  # Default to .txt if no extension
+                $tempFileName = "$safeFileName`_$($commit.Substring(0,8))$extension"
                 $tempPath = Join-Path $OutputDir $tempFileName
                 
                 $content | Set-Content $tempPath -Encoding UTF8
@@ -452,7 +455,7 @@ function Parse-FileVersions {
         [string]$FunctionName,
         [bool]$Globals,
         [bool]$Exports,
-        [string]$Parser = "javascript-parser.js",
+        [string]$Parser = "tree-sitter-parser.js",
         [hashtable]$Config
     )
 
@@ -476,18 +479,31 @@ function Parse-FileVersions {
             # Build parser arguments with extraction context
             $parserArgs = @($version.TempFilePath)
             
-            # Pass extraction context as JSON
+            # Write extraction context to temp file to avoid quote escaping issues
+            $contextFile = [System.IO.Path]::GetTempFileName()
             $contextJson = $extractionContext | ConvertTo-Json -Depth 10 -Compress
-            $parserArgs += @("--extraction-context", $contextJson)
-            
+            # Use UTF8 without BOM to avoid JSON parsing issues
+            $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+            [System.IO.File]::WriteAllText($contextFile, $contextJson, $utf8NoBom)
+
+            # Build command line arguments
+            $nodeArgs = @($parserPath, $version.TempFilePath, "--extraction-context", "@$contextFile")
+
             # Pass configuration if available
             if ($Config) {
+                $configFile = [System.IO.Path]::GetTempFileName()
                 $configJson = $Config | ConvertTo-Json -Depth 10 -Compress
-                $parserArgs += @("--language-config", $configJson)
+                $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+                [System.IO.File]::WriteAllText($configFile, $configJson, $utf8NoBom)
+                $nodeArgs += @("--language-config", "@$configFile")
             }
-            
+
             # Run the parser
-            $parseResult = node $parserPath @parserArgs | ConvertFrom-Json
+            $parseResult = & node @nodeArgs | ConvertFrom-Json
+
+            # Clean up temp files
+            Remove-Item -Path $contextFile -ErrorAction SilentlyContinue
+            if ($configFile) { Remove-Item -Path $configFile -ErrorAction SilentlyContinue }
             
             if ($parseResult -and $parseResult.segments -and $parseResult.segments.Count -gt 0) {
                 # Filter segments based on extraction rules
@@ -1793,7 +1809,7 @@ function Cleanup-TempFiles {
 }
 
 function Main {
-    Write-Host "Code Evolution Tracker (Acorn-based)" -ForegroundColor Cyan
+    Write-Host "Code Evolution Tracker" -ForegroundColor Cyan
     Write-Host "====================================" -ForegroundColor Cyan
     
     # Check prerequisites
@@ -1825,7 +1841,7 @@ function Main {
         Write-Host "Found $($fileVersions.Count) file versions" -ForegroundColor Green
         
         # Step 2: Parse with Acorn
-        Write-Host "`nStep 2: Parsing with Acorn AST analysis..." -ForegroundColor Yellow
+        Write-Host "`nStep 2: Parsing code with language auto-detection..." -ForegroundColor Yellow
         $parsedVersions = Parse-FileVersions -FileVersions $fileVersions -BaseClass $BaseClass -ClassName $ClassName -Parser $Parser
         
         Write-Host "Successfully parsed $($parsedVersions.Count) versions" -ForegroundColor Green
