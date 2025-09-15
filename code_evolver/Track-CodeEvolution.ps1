@@ -120,7 +120,9 @@ param(
     [switch]$ExportHtml,
     [switch]$ExportUnifiedDiff,
     [switch]$ExportCompressedDiff,
-    [switch]$Verbose
+    [switch]$Verbose,
+    [switch]$IncludeGitNotes,
+    [switch]$EnhanceCommitParsing
 )
 
 function Test-Prerequisites {
@@ -262,6 +264,210 @@ function Build-ExtractionContext {
     $context.Elements = $context.Elements | Select-Object -Unique
     
     return $context
+}
+
+function Parse-CommitMessage {
+    param(
+        [string]$Message,
+        [string]$CommitHash,
+        [string]$Author,
+        [datetime]$Date,
+        [string]$GitNotes = $null
+    )
+
+    $result = @{
+        Raw = $Message
+        Notes = $GitNotes
+        Type = "unknown"
+        Scope = $null
+        Summary = $Message
+        Components = @()
+        Actions = @()
+        IsStructured = $false
+        ConventionalType = $null
+        SemanticInfo = @{}
+        CommitHash = $CommitHash
+        Author = $Author
+        Date = $Date
+    }
+
+    # Parse structured format (JetBrains AI): type(scope): summary\n\n[component] ACTION: description
+    if ($Message -match '^(\w+)(?:\(([^)]+)\))?: (.+)') {
+        $result.ConventionalType = $matches[1]
+        $result.Scope = $matches[2]
+        $result.Summary = $matches[3]
+
+        # Look for component changes in message body
+        $lines = $Message -split "`n"
+        foreach ($line in $lines) {
+            if ($line -match '^\[([^\]]+)\]\s+(NEW|MODIFIED|REMOVED|RENAMED|MOVED):\s*(.+)') {
+                $component = @{
+                    Name = $matches[1]
+                    Action = $matches[2]
+                    Description = $matches[3]
+                }
+                $result.Components += $component
+                $result.Actions += $matches[2]
+                $result.IsStructured = $true
+            }
+        }
+    }
+
+    # Parse git notes with same logic if present
+    if ($GitNotes) {
+        $noteLines = $GitNotes -split "`n"
+        foreach ($line in $noteLines) {
+            if ($line -match '^\[([^\]]+)\]\s+(NEW|MODIFIED|REMOVED|RENAMED|MOVED):\s*(.+)') {
+                $component = @{
+                    Name = $matches[1]
+                    Action = $matches[2]
+                    Description = $matches[3]
+                    FromNotes = $true
+                }
+                $result.Components += $component
+                $result.Actions += $matches[2]
+                $result.IsStructured = $true
+            }
+        }
+    }
+
+    # Detect common semantic patterns if not structured
+    if (-not $result.IsStructured) {
+        # Common action patterns
+        $actionPatterns = @{
+            'add|create|implement|introduce' = 'addition'
+            'fix|repair|resolve|correct' = 'fix'
+            'update|modify|change|enhance' = 'modification'
+            'remove|delete|drop|clean' = 'removal'
+            'refactor|restructure|reorganize' = 'refactor'
+            'test|spec' = 'test'
+            'doc|document|readme' = 'documentation'
+        }
+
+        $lowerMessage = $Message.ToLower()
+        foreach ($pattern in $actionPatterns.Keys) {
+            if ($lowerMessage -match $pattern) {
+                $result.SemanticInfo.ActionType = $actionPatterns[$pattern]
+                break
+            }
+        }
+    }
+
+    # Unique actions
+    $result.Actions = $result.Actions | Select-Object -Unique
+
+    return $result
+}
+
+function Group-CommitMessages {
+    param(
+        [array]$ParsedCommits
+    )
+
+    $groups = @()
+
+    # Group by component + action for structured commits
+    $structuredCommits = $ParsedCommits | Where-Object { $_.IsStructured }
+    if ($structuredCommits) {
+        $componentGroups = @{}
+        foreach ($commit in $structuredCommits) {
+            foreach ($component in $commit.Components) {
+                $key = "$($component.Name):$($component.Action)"
+                if (-not $componentGroups.ContainsKey($key)) {
+                    $componentGroups[$key] = @{
+                        ComponentName = $component.Name
+                        Action = $component.Action
+                        Commits = @()
+                        Descriptions = @()
+                    }
+                }
+                $componentGroups[$key].Commits += $commit
+                $componentGroups[$key].Descriptions += $component.Description
+            }
+        }
+
+        foreach ($key in $componentGroups.Keys) {
+            $group = $componentGroups[$key]
+            $groups += @{
+                Type = 'component'
+                Summary = "$($group.Commits.Count) commits: $($group.ComponentName) $($group.Action.ToLower())"
+                ComponentName = $group.ComponentName
+                Action = $group.Action
+                Commits = $group.Commits
+                Descriptions = $group.Descriptions | Select-Object -Unique
+            }
+        }
+    }
+
+    # Group by conventional type + scope
+    $conventionalCommits = $ParsedCommits | Where-Object { $_.ConventionalType -and -not $_.IsStructured }
+    if ($conventionalCommits) {
+        $typeGroups = $conventionalCommits | Group-Object -Property ConventionalType,Scope
+        foreach ($typeGroup in $typeGroups) {
+            $type = $typeGroup.Group[0].ConventionalType
+            $scope = $typeGroup.Group[0].Scope
+            $scopeText = if ($scope) { "($scope)" } else { "" }
+
+            $groups += @{
+                Type = 'conventional'
+                Summary = "$($typeGroup.Count) commits: $type$scopeText"
+                ConventionalType = $type
+                Scope = $scope
+                Commits = $typeGroup.Group
+            }
+        }
+    }
+
+    # Group by semantic action type
+    $semanticCommits = $ParsedCommits | Where-Object {
+        $_.SemanticInfo.ActionType -and -not $_.IsStructured -and -not $_.ConventionalType
+    }
+    if ($semanticCommits) {
+        $semanticGroups = $semanticCommits | Group-Object -Property { $_.SemanticInfo.ActionType }
+        foreach ($semanticGroup in $semanticGroups) {
+            $actionType = $semanticGroup.Group[0].SemanticInfo.ActionType
+
+            $groups += @{
+                Type = 'semantic'
+                Summary = "$($semanticGroup.Count) commits: $actionType"
+                ActionType = $actionType
+                Commits = $semanticGroup.Group
+            }
+        }
+    }
+
+    # Add ungrouped commits
+    $ungroupedCommits = $ParsedCommits | Where-Object {
+        -not $_.IsStructured -and -not $_.ConventionalType -and -not $_.SemanticInfo.ActionType
+    }
+    if ($ungroupedCommits) {
+        $groups += @{
+            Type = 'ungrouped'
+            Summary = "$($ungroupedCommits.Count) other commits"
+            Commits = $ungroupedCommits
+        }
+    }
+
+    return $groups
+}
+
+function Get-GitNotes {
+    param(
+        [string]$CommitHash
+    )
+
+    try {
+        $notes = & git notes show $CommitHash 2>$null
+        if ($LASTEXITCODE -eq 0 -and $notes) {
+            return ($notes -join "`n")
+        }
+    }
+    catch {
+        # No notes for this commit or git notes not initialized
+        Write-Verbose "No git notes found for commit $($CommitHash.Substring(0,8))"
+    }
+
+    return $null
 }
 
 function Get-LanguageConfiguration {
@@ -508,16 +714,23 @@ function Get-GitFileVersions {
                 
                 $content | Set-Content $tempPath -Encoding UTF8
                 
+                # Get git notes if enabled
+                $gitNotes = $null
+                if ($IncludeGitNotes) {
+                    $gitNotes = Get-GitNotes -CommitHash $commit
+                }
+
                 $versionInfo = [PSCustomObject]@{
                     File = $file
                     Commit = $commit
                     Date = [DateTime]::Parse($date)
                     Message = $message
                     Author = $author
+                    GitNotes = $gitNotes
                     TempFilePath = $tempPath
                     Content = $content
                 }
-                
+
                 $results += $versionInfo
             }
         }
@@ -650,6 +863,7 @@ function Build-EvolutionTimeline {
                 Date = $version.Date
                 Author = $version.Author
                 Message = $version.Message
+                GitNotes = $version.GitNotes
                 StartLine = $segment.startLine + 1  # Convert back to 1-based
                 EndLine = $segment.endLine + 1
                 LineCount = $segment.lineCount
@@ -704,7 +918,7 @@ function Build-EvolutionTimeline {
         if ($meaningfulVersions.Count -gt 0) {
             $timeline = $meaningfulVersions | Sort-Object Date -Descending  # Most recent first
 
-            [PSCustomObject]@{
+            $chain = [PSCustomObject]@{
                 Name = $timeline[0].Name
                 Type = $timeline[0].Type
                 File = $timeline[0].File
@@ -715,13 +929,36 @@ function Build-EvolutionTimeline {
                 Changes = Get-EvolutionChanges -Timeline $timeline
                 OriginalVersionCount = $allVersions.Count
             }
+
+            # Parse and group commit messages if enabled
+            if ($EnhanceCommitParsing) {
+                $parsedCommits = @()
+                foreach ($version in $timeline) {
+                    $parsed = Parse-CommitMessage -Message $version.Message `
+                        -CommitHash $version.Commit `
+                        -Author $version.Author `
+                        -Date $version.Date `
+                        -GitNotes $version.GitNotes
+                    $parsed | Add-Member -MemberType NoteProperty -Name "Version" -Value $version
+                    $parsedCommits += $parsed
+                }
+
+                # Group similar commits
+                $commitGroups = Group-CommitMessages -ParsedCommits $parsedCommits
+
+                # Add grouped commit analysis to chain
+                $chain | Add-Member -MemberType NoteProperty -Name "CommitGroups" -Value $commitGroups
+                $chain | Add-Member -MemberType NoteProperty -Name "ParsedCommits" -Value $parsedCommits
+            }
+
+            $chain
         }
         $commitIndex++  # Increment for next commit pair
     } | Where-Object { $_ -ne $null }
     
-    # Save evolution data
+    # Save evolution data (use high depth to avoid truncation warning)
     $evolutionFile = Join-Path $OutputDir "evolution-timeline.json"
-    $evolutionChains | ConvertTo-Json -Depth 10 | Set-Content $evolutionFile
+    $evolutionChains | ConvertTo-Json -Depth 20 | Set-Content $evolutionFile
     
     return $evolutionChains
 }
@@ -1917,7 +2154,64 @@ function Export-HtmlReport {
             $html += @"
                     </div>
                 </div>
+"@
+
+            # Show enhanced commit information if available
+            if ($EnhanceCommitParsing -and $chain.ParsedCommits) {
+                # Find the parsed commit for this version
+                $parsedCommit = $chain.ParsedCommits | Where-Object { $_.CommitHash -eq $version.Commit } | Select-Object -First 1
+
+                if ($parsedCommit -and $parsedCommit.IsStructured) {
+                    $html += @"
+                <div style="margin: 10px 0; padding: 10px; border-left: 3px solid #00ffff;">
+"@
+                    if ($parsedCommit.ConventionalType) {
+                        $scopeText = if ($parsedCommit.Scope) { "($($parsedCommit.Scope))" } else { "" }
+                        $html += @"
+                    <div style="color: #ff14ff; font-weight: bold;">$($parsedCommit.ConventionalType)${scopeText}: $($parsedCommit.Summary)</div>
+"@
+                    }
+
+                    if ($parsedCommit.Components.Count -gt 0) {
+                        $html += @"
+                    <div style="margin-top: 5px;">
+"@
+                        foreach ($component in $parsedCommit.Components) {
+                            $fromNotesText = if ($component.FromNotes) { " (from git notes)" } else { "" }
+                            $actionColor = switch ($component.Action) {
+                                "NEW" { "#00ff00" }
+                                "MODIFIED" { "#00ffff" }
+                                "REMOVED" { "#ff1493" }
+                                default { "#ffcc00" }
+                            }
+                            $html += @"
+                        <div style="margin-left: 20px;">
+                            <span style="color: $actionColor;">[$($component.Name)] $($component.Action):</span>
+                            <span style="color: #ffffff;">$($component.Description)$fromNotesText</span>
+                        </div>
+"@
+                        }
+                        $html += @"
+                    </div>
+"@
+                    }
+                    $html += @"
+                </div>
+"@
+                } else {
+                    # Show regular commit message
+                    $html += @"
                 <div><em>$($version.Message)</em></div>
+"@
+                }
+            } else {
+                # Show regular commit message
+                $html += @"
+                <div><em>$($version.Message)</em></div>
+"@
+            }
+
+            $html += @"
                 <div class="code-content collapsed" id="$codeId">$escapedContent</div>
 "@
             
@@ -1942,6 +2236,53 @@ function Export-HtmlReport {
             $versionIndex++
         }
         
+        # Show commit groups if available
+        if ($EnhanceCommitParsing -and $chain.CommitGroups -and $chain.CommitGroups.Count -gt 0) {
+            $html += @"
+            <div class="changes-summary" style="background: #1a1a1a; border: 1px solid #00ffff; margin-top: 20px;">
+                <h4 style="color: #ff14ff;">Commit Groups</h4>
+"@
+            foreach ($group in $chain.CommitGroups) {
+                $groupColor = switch ($group.Type) {
+                    'component' { "#00ffff" }
+                    'conventional' { "#ff14ff" }
+                    'semantic' { "#ffcc00" }
+                    default { "#ffffff" }
+                }
+
+                $html += @"
+                <div style="margin: 10px 0; padding: 10px; border-left: 3px solid $groupColor;">
+                    <div style="color: $groupColor; font-weight: bold;">$($group.Summary)</div>
+"@
+
+                if ($group.Type -eq 'component' -and $group.Descriptions) {
+                    $html += @"
+                    <div style="margin-top: 5px; margin-left: 20px; color: #ffffff;">
+"@
+                    foreach ($desc in ($group.Descriptions | Select-Object -First 3)) {
+                        $html += @"
+                        <div>• $desc</div>
+"@
+                    }
+                    if ($group.Descriptions.Count -gt 3) {
+                        $html += @"
+                        <div style="color: #808080;">... and $($group.Descriptions.Count - 3) more</div>
+"@
+                    }
+                    $html += @"
+                    </div>
+"@
+                }
+
+                $html += @"
+                </div>
+"@
+            }
+            $html += @"
+            </div>
+"@
+        }
+
         if ($chain.Changes -and $chain.Changes.Count -gt 0) {
             $html += @"
             <div class="changes-summary">
@@ -1950,10 +2291,10 @@ function Export-HtmlReport {
             foreach ($change in ($chain.Changes | Sort-Object Date -Descending | Select-Object -First 5)) {
                 $changeClass = if ($change.LineCountChange -gt 0) { "added" } elseif ($change.LineCountChange -lt 0) { "removed" } else { "modified" }
                 $changeText = if ($change.LineCountChange -ne 0) { " ($($change.LineCountChange) lines)" } else { ""  }
-                
+
                 $html += @"
                 <div class="change-item">
-                    <span class="$changeClass">$($change.Date.ToString('yyyy-MM-dd'))</span>: 
+                    <span class="$changeClass">$($change.Date.ToString('yyyy-MM-dd'))</span>:
                     $($change.Message)$changeText
                 </div>
 "@
