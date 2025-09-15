@@ -6,6 +6,7 @@ package-lock.json
 # Output directories
 */output/
 */code-evolution-analysis/
+code-evolution-analysis/
 
 # OS files
 .DS_Store
@@ -30,3 +31,6 @@ test-data/
 code_evolver/emsdk/
 code_evolver/tree-sitter-powershell/
 code_evolver/tree-sitter-PowerShell/
+
+# Copilot configuration (user-specific)
+.copilot-commit-message-instructions.md

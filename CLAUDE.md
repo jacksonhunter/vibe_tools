@@ -136,7 +136,16 @@ Git shows file-level diffs which can be overwhelming when tracking specific func
 
 ### Recent Updates (September 2025)
 
-#### Radio Group View Buttons
+#### Enhanced Commit Message Parsing (September 14, 2025)
+- **Automatic Detection**: Script now automatically parses and enhances structured commit messages
+- **No Configuration Required**: Works out-of-the-box without opt-in flags
+- **Component-Level Tracking**: Detects [Component] ACTION format in commit messages
+- **Git Notes Support**: Automatically retrieves and displays git notes for retroactive documentation
+- **Grouped Summaries**: Groups similar commits by component, type, or semantic action
+- **Backward Compatible**: Shows plain commits as before, enhanced view only for structured data
+- **Opt-Out Available**: Use `-SimpleCommitDisplay` flag to disable enhancements if needed
+
+#### Radio Group View Buttons (September 14, 2025)
 The HTML report now features radio-style view switching:
 - **Code**, **Diff**, and **Compressed** buttons act as a radio group
 - Only one view can be active at a time

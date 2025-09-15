@@ -1190,8 +1190,14 @@ function Get-CompressedDiffText {
         }
 
         # Then show the current line (if it exists in final version)
+        # Skip showing unchanged line if there are additions for this line (to avoid duplication)
         if ($lineNum -le $finalLines.Count) {
-            $output += "    $($finalLines[$lineNum - 1])`n"
+            $hasAdditions = $changesByLine.ContainsKey($lineNum) -and
+                           ($changesByLine[$lineNum] | Where-Object { $_.Type -eq 'add' }).Count -gt 0
+
+            if (-not $hasAdditions) {
+                $output += "    $($finalLines[$lineNum - 1])`n"
+            }
         }
         $commitIndex++  # Increment for next commit pair
     }
@@ -1365,9 +1371,15 @@ function Get-CompressedDiff {
         }
 
         # Then show the current line (if it exists in final version) with line number
+        # Skip showing unchanged line if there are additions for this line (to avoid duplication)
         if ($lineNum -le $finalLines.Count) {
-            $escapedLine = [System.Web.HttpUtility]::HtmlEncode($finalLines[$lineNum - 1])
-            $output += "<div class='diff-line unchanged'><span class='line-num-unchanged'>$lineNum</span> $escapedLine</div>"
+            $hasAdditions = $changesByLine.ContainsKey($lineNum) -and
+                           ($changesByLine[$lineNum] | Where-Object { $_.Type -eq 'add' }).Count -gt 0
+
+            if (-not $hasAdditions) {
+                $escapedLine = [System.Web.HttpUtility]::HtmlEncode($finalLines[$lineNum - 1])
+                $output += "<div class='diff-line unchanged'><span class='line-num-unchanged'>$lineNum</span> $escapedLine</div>"
+            }
         }
     }
 
