@@ -54,6 +54,12 @@
 .PARAMETER Verbose
     Show detailed progress messages during execution
 
+.PARAMETER SimpleCommitDisplay
+    Opt-out flag to disable automatic enhancement of structured commit messages.
+    By default, the script automatically detects and displays enhanced information
+    for structured commits (JetBrains AI format, conventional commits, etc.).
+    Use this flag to force simple commit message display only.
+
 .EXAMPLE
     .\Track-CodeEvolution.ps1 -BaseClass "BaseService" -ShowDiffs
     # Track all classes extending BaseService
@@ -121,8 +127,7 @@ param(
     [switch]$ExportUnifiedDiff,
     [switch]$ExportCompressedDiff,
     [switch]$Verbose,
-    [switch]$IncludeGitNotes,
-    [switch]$EnhanceCommitParsing
+    [switch]$SimpleCommitDisplay  # Opt-out flag to disable automatic enhancement
 )
 
 function Test-Prerequisites {
@@ -714,11 +719,8 @@ function Get-GitFileVersions {
                 
                 $content | Set-Content $tempPath -Encoding UTF8
                 
-                # Get git notes if enabled
-                $gitNotes = $null
-                if ($IncludeGitNotes) {
-                    $gitNotes = Get-GitNotes -CommitHash $commit
-                }
+                # Always try to get git notes - it's fast and returns null if none exist
+                $gitNotes = Get-GitNotes -CommitHash $commit
 
                 $versionInfo = [PSCustomObject]@{
                     File = $file
@@ -930,26 +932,24 @@ function Build-EvolutionTimeline {
                 OriginalVersionCount = $allVersions.Count
             }
 
-            # Parse and group commit messages if enabled
-            if ($EnhanceCommitParsing) {
-                $parsedCommits = @()
-                foreach ($version in $timeline) {
-                    $parsed = Parse-CommitMessage -Message $version.Message `
-                        -CommitHash $version.Commit `
-                        -Author $version.Author `
-                        -Date $version.Date `
-                        -GitNotes $version.GitNotes
-                    $parsed | Add-Member -MemberType NoteProperty -Name "Version" -Value $version
-                    $parsedCommits += $parsed
-                }
-
-                # Group similar commits
-                $commitGroups = Group-CommitMessages -ParsedCommits $parsedCommits
-
-                # Add grouped commit analysis to chain
-                $chain | Add-Member -MemberType NoteProperty -Name "CommitGroups" -Value $commitGroups
-                $chain | Add-Member -MemberType NoteProperty -Name "ParsedCommits" -Value $parsedCommits
+            # Always parse commit messages - it's lightweight and provides automatic enhancement
+            $parsedCommits = @()
+            foreach ($version in $timeline) {
+                $parsed = Parse-CommitMessage -Message $version.Message `
+                    -CommitHash $version.Commit `
+                    -Author $version.Author `
+                    -Date $version.Date `
+                    -GitNotes $version.GitNotes
+                $parsed | Add-Member -MemberType NoteProperty -Name "Version" -Value $version
+                $parsedCommits += $parsed
             }
+
+            # Always group commits - grouping logic handles all message formats
+            $commitGroups = Group-CommitMessages -ParsedCommits $parsedCommits
+
+            # Always add the analysis (used automatically when structured data exists)
+            $chain | Add-Member -MemberType NoteProperty -Name "CommitGroups" -Value $commitGroups
+            $chain | Add-Member -MemberType NoteProperty -Name "ParsedCommits" -Value $parsedCommits
 
             $chain
         }
@@ -2156,11 +2156,12 @@ function Export-HtmlReport {
                 </div>
 "@
 
-            # Show enhanced commit information if available
-            if ($EnhanceCommitParsing -and $chain.ParsedCommits) {
+            # Automatically show enhanced commit information when structured data is detected (unless SimpleCommitDisplay is set)
+            if (-not $SimpleCommitDisplay -and $chain.ParsedCommits) {
                 # Find the parsed commit for this version
                 $parsedCommit = $chain.ParsedCommits | Where-Object { $_.CommitHash -eq $version.Commit } | Select-Object -First 1
 
+                # Show enhanced view only if structured data was found
                 if ($parsedCommit -and $parsedCommit.IsStructured) {
                     $html += @"
                 <div style="margin: 10px 0; padding: 10px; border-left: 3px solid #00ffff;">
@@ -2236,8 +2237,11 @@ function Export-HtmlReport {
             $versionIndex++
         }
         
-        # Show commit groups if available
-        if ($EnhanceCommitParsing -and $chain.CommitGroups -and $chain.CommitGroups.Count -gt 0) {
+        # Automatically show commit groups when structured commits are detected (unless SimpleCommitDisplay is set)
+        if (-not $SimpleCommitDisplay -and $chain.CommitGroups -and $chain.CommitGroups.Count -gt 0) {
+            # Only show groups if we have meaningful structured data
+            $hasStructuredData = $chain.ParsedCommits | Where-Object { $_.IsStructured -or $_.ConventionalType -or $_.SemanticInfo.ActionType } | Select-Object -First 1
+            if ($hasStructuredData) {
             $html += @"
             <div class="changes-summary" style="background: #1a1a1a; border: 1px solid #00ffff; margin-top: 20px;">
                 <h4 style="color: #ff14ff;">Commit Groups</h4>
@@ -2281,6 +2285,7 @@ function Export-HtmlReport {
             $html += @"
             </div>
 "@
+            }
         }
 
         if ($chain.Changes -and $chain.Changes.Count -gt 0) {
