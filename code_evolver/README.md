@@ -17,17 +17,41 @@ A powerful PowerShell tool that tracks how code evolves through Git history, ext
 ## Installation
 
 ### Prerequisites
-- Git repository
-- PowerShell (Windows PowerShell or PowerShell Core)
-- Node.js (for parser dependencies)
+- Git repository (your project must be a git repo)
+- PowerShell 5.1+ (Windows PowerShell or PowerShell Core)
+- Node.js 14+ (for parser dependencies)
 
-### Setup
+### Setup (Without Adding Files to Your Project)
+
+#### Option 1: External Tool Installation (Recommended)
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd vibe_tools/code_evolver
+# 1. Clone vibe_tools OUTSIDE your project
+git clone https://github.com/yourusername/vibe_tools.git ~/tools/vibe_tools
 
-# Dependencies are auto-installed on first run
+# 2. In YOUR project, add to .gitignore:
+echo "code-evolution-analysis/" >> .gitignore
+
+# 3. Run from your project root:
+powershell.exe -ExecutionPolicy Bypass -File "~/tools/vibe_tools/code_evolver/Track-CodeEvolution.ps1" -ClassName "YourClass" -ExportHtml
+```
+
+#### Option 2: PowerShell Alias (Most Convenient)
+```powershell
+# Add to your PowerShell profile ($PROFILE):
+Set-Alias track "C:\tools\vibe_tools\code_evolver\Track-CodeEvolution.ps1"
+
+# Then from any project:
+track -ClassName "MyClass" -ExportHtml
+```
+
+#### Option 3: Temporary Analysis
+```bash
+# Clone to temp location
+git clone https://github.com/yourusername/vibe_tools.git /tmp/vibe_tools
+
+# Run and clean up
+powershell /tmp/vibe_tools/code_evolver/Track-CodeEvolution.ps1 -ClassName "MyClass" -ExportHtml
+rm -rf ./code-evolution-analysis  # Remove after viewing
 ```
 
 ## Usage
@@ -99,15 +123,21 @@ git notes add -m "[UserValidator] MODIFIED: Enhanced email validation
 The compressed diff format shows all historical changes inline with the final code:
 
 ```
-@@@ commit1 → commit2 @@@
-Author: name | Date | Message
+@@@ a4da2cf → 2e3e6da @@@ + added − deleted
+@@@ 2e3e6da → 709a707 @@@ + added − deleted
 
-L52: - old code that was removed
-L52: + new code that replaced it
-52  final version of the line
+L2: + static _ = this.register;
+L2: - static priority = 5; // Runs after routing
+2: = static priority = 5;
 ```
 
-This reduces file size by ~95% while preserving all change information.
+### Format Features
+- **Headers**: Show commit progression with clickable colored indicators
+- **Line-level changes**: `L{num}:` prefix for changes, plain number for final state
+- **Operations**: `+` (added), `-` (deleted), `=` (final version)
+- **Shade coding**: Each commit gets a unique color shade (100-900 scale)
+- **Size reduction**: ~75% smaller than traditional diffs
+- **Machine readable**: Consistent pattern for LLM parsing
 
 ## Language Support
 
@@ -155,6 +185,26 @@ Automatically groups related commits:
 - By conventional commit type
 - By semantic patterns
 
+## Recent Updates (September 2025)
+
+### Interactive Features
+- **Clickable diff lines**: Click any change in compressed view to jump to its diff
+- **Unified diff copy**: Single button exports proper unified diff format
+- **Shade-colored headers**: Commit indicators match their diff colors
+- **Radio button views**: Exclusive Code/Diff/Compressed view switching
+
+### Bug Fixes
+- **Fixed diff ordering**: Now shows older → newer (chronological)
+- **Line number accuracy**: Removed blank line ignoring for accurate line numbers
+- **Centralized colors**: Single source of truth for shade definitions
+- **Version indexing**: Fixed reversed version ordering in diff display
+
+### Parser Improvements
+- **R language**: Full support for R6, S3, S4 classes and methods
+- **PowerShell**: Complete AST support via Airbus-CERT grammar
+- **Tree-sitter 0.25.x**: All grammars updated to latest versions
+- **Auto language detection**: Parser automatically detects file language
+
 ## Troubleshooting
 
 ### No files found
@@ -171,6 +221,11 @@ Automatically groups related commits:
 - Large repositories may take time
 - Use `-FilePath` to filter
 - Compressed diff reduces output size
+
+### Windows-specific issues
+- Use forward slashes in paths or escape backslashes
+- PowerShell execution policy may need `-ExecutionPolicy Bypass`
+- BOM issues are handled automatically
 
 ## Contributing
 

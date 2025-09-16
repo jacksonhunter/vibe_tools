@@ -900,7 +900,7 @@ function Build-EvolutionTimeline {
                     $version.Content | Set-Content $tempTo -Encoding UTF8
 
                     # Capture the full diff output for later use
-                    $diffOutput = & git diff --no-index --unified=0 --ignore-all-space --ignore-blank-lines $tempFrom $tempTo 2>$null
+                    $diffOutput = & git diff --no-index --unified=0 --ignore-all-space $tempFrom $tempTo 2>$null
 
                     if ($LASTEXITCODE -ne 0) {
                         # Diff found differences - include this version and store diff data
@@ -1136,6 +1136,7 @@ function Get-CompressedDiffText {
                             CommitDate = $commitDate
                             ShadeValue = $shadeValue
                             Line = $currentOldLine
+                            VersionIndex = $versionIdx
                         }
                         $currentOldLine++
                     }
@@ -1155,6 +1156,7 @@ function Get-CompressedDiffText {
                             CommitDate = $commitDate
                             ShadeValue = $shadeValue
                             Line = $currentNewLine
+                            VersionIndex = $versionIdx
                         }
                         $currentNewLine++
                     }
@@ -1190,16 +1192,10 @@ function Get-CompressedDiffText {
         }
 
         # Then show the current line (if it exists in final version)
-        # Skip showing unchanged line if there are additions for this line (to avoid duplication)
         if ($lineNum -le $finalLines.Count) {
-            $hasAdditions = $changesByLine.ContainsKey($lineNum) -and
-                           ($changesByLine[$lineNum] | Where-Object { $_.Type -eq 'add' }).Count -gt 0
-
-            if (-not $hasAdditions) {
-                $output += "    $($finalLines[$lineNum - 1])`n"
-            }
+            $output += "    $($finalLines[$lineNum - 1])`n"
         }
-        $commitIndex++  # Increment for next commit pair
+        #$commitIndex++  # Increment for next commit pair
     }
 
     return $output
@@ -1207,7 +1203,8 @@ function Get-CompressedDiffText {
 
 function Get-CompressedDiff {
     param(
-        [PSCustomObject]$Chain
+        [PSCustomObject]$Chain,
+        [int]$ChainIndex
     )
 
     if ($Chain.Versions.Count -le 1) {
@@ -1266,6 +1263,11 @@ function Get-CompressedDiff {
 
     # Process each version that has cached diff data
     $commitIndex = 0
+    $versionIndices = @{}  # Map versions to their indices in the chain
+    for ($i = 0; $i -lt $Chain.Versions.Count; $i++) {
+        $versionIndices[$Chain.Versions[$i].Commit] = $i
+    }
+
     foreach ($version in $chronologicalVersions | Where-Object { $_.DiffFromPrevious }) {
         $fromCommit = $version.PreviousVersion.Commit.Substring(0, 7)
         $toCommit = $version.Commit.Substring(0, 7)
@@ -1274,7 +1276,18 @@ function Get-CompressedDiff {
         $commitDate = $version.Date.ToString('yyyy-MM-dd HH:mm')
         $shadeValue = Get-ShadeValue -CommitIndex $commitIndex -TotalCommits $totalCommits
 
-        $allHeaders += "@@@ $fromCommit → $toCommit @@@"
+        # Find the version index in the chain (descending order)
+        $versionIdx = $versionIndices[$version.Commit]
+
+        # Store header with metadata for later use
+        $allHeaders += @{
+            Text = "@@@ $fromCommit → $toCommit @@@"
+            FromCommit = $fromCommit
+            ToCommit = $toCommit
+            Version = $version
+            VersionIndex = $versionIdx
+            ShadeValue = $shadeValue
+        }
 
         # Use the cached diff output instead of running git diff again
         $diffOutput = $version.DiffFromPrevious
@@ -1310,6 +1323,7 @@ function Get-CompressedDiff {
                             CommitDate = $commitDate
                             ShadeValue = $shadeValue
                             Line = $currentOldLine
+                            VersionIndex = $versionIdx
                         }
                         $currentOldLine++
                     }
@@ -1329,6 +1343,7 @@ function Get-CompressedDiff {
                             CommitDate = $commitDate
                             ShadeValue = $shadeValue
                             Line = $currentNewLine
+                            VersionIndex = $versionIdx
                         }
                         $currentNewLine++
                     }
@@ -1339,9 +1354,26 @@ function Get-CompressedDiff {
     # Build the compressed output
     $output = ""
 
-    # Add all commit headers at the top
+    # Get centralized shade color definitions
+    $shadeColors = Get-ShadeColorDefinitions
+    $addShadeColors = $shadeColors.Add
+    $delShadeColors = $shadeColors.Del
+
+    # Add all commit headers at the top with colored indicators
     foreach ($header in $allHeaders) {
-        $output += "<div class='compressed-header'>$header</div>"
+        $diffId = "diff_${ChainIndex}_$($header.VersionIndex)"
+        $shade = $header.ShadeValue
+        $addColors = $addShadeColors[$shade]
+        $delColors = $delShadeColors[$shade]
+
+        $headerHtml = "<div class='compressed-header'>"
+        $headerHtml += "$($header.Text) "
+        # Added indicator with shade-specific colors
+        $headerHtml += "<span style='background: $($addColors.bg); color: $($addColors.color); padding: 2px 6px; border-radius: 3px; cursor: pointer; margin-left: 8px; font-weight: bold;' onclick='showDiffFromCompressed(""$diffId"")'><strong>+</strong> added</span> "
+        # Deleted indicator with shade-specific colors
+        $headerHtml += "<span style='background: $($delColors.bg); color: $($delColors.color); padding: 2px 6px; border-radius: 3px; cursor: pointer; font-weight: bold;' onclick='showDiffFromCompressed(""$diffId"")'><strong>−</strong> deleted</span>"
+        $headerHtml += "</div>"
+        $output += $headerHtml
     }
 
     # Get the final version content
@@ -1360,26 +1392,21 @@ function Get-CompressedDiff {
                 # Create safe tooltip text
                 $safeMessage = $change.CommitMessage -replace '"', '&quot;' -replace "'", '&apos;'
                 $tooltipText = "$($change.ToCommit): $safeMessage by $($change.CommitAuthor) at $($change.CommitDate)"
+                $diffId = "diff_${ChainIndex}_$($change.VersionIndex)"
 
                 if ($change.Type -eq 'delete') {
-                    $output += "<div class='diff-line diff-del $shadeClass' title='$tooltipText'><span class='line-num'>L$lineNum</span>: - $escapedContent</div>"
+                    $output += "<div class='diff-line diff-del $shadeClass' title='$tooltipText' style='cursor: pointer;' onclick='showDiffFromCompressed(""$diffId"")'><span class='line-num'>L$lineNum</span>: - $escapedContent</div>"
                 }
                 else {
-                    $output += "<div class='diff-line diff-add $shadeClass' title='$tooltipText'><span class='line-num'>L$lineNum</span>: + $escapedContent</div>"
+                    $output += "<div class='diff-line diff-add $shadeClass' title='$tooltipText' style='cursor: pointer;' onclick='showDiffFromCompressed(""$diffId"")'><span class='line-num'>L$lineNum</span>: + $escapedContent</div>"
                 }
             }
         }
 
         # Then show the current line (if it exists in final version) with line number
-        # Skip showing unchanged line if there are additions for this line (to avoid duplication)
         if ($lineNum -le $finalLines.Count) {
-            $hasAdditions = $changesByLine.ContainsKey($lineNum) -and
-                           ($changesByLine[$lineNum] | Where-Object { $_.Type -eq 'add' }).Count -gt 0
-
-            if (-not $hasAdditions) {
-                $escapedLine = [System.Web.HttpUtility]::HtmlEncode($finalLines[$lineNum - 1])
-                $output += "<div class='diff-line unchanged'><span class='line-num-unchanged'>$lineNum</span> $escapedLine</div>"
-            }
+            $escapedLine = [System.Web.HttpUtility]::HtmlEncode($finalLines[$lineNum - 1])
+            $output += "<div class='diff-line unchanged'><span class='line-num-unchanged'>$lineNum</span>: = $escapedLine</div>"
         }
     }
 
@@ -1388,12 +1415,83 @@ function Get-CompressedDiff {
     return $output
 }
 
+function Get-ShadeColorDefinitions {
+    # Define shade-specific colors for additions and deletions
+    $addShadeColors = @{
+        100 = @{ bg = "rgba(152, 255, 152, 0.15)"; color = "rgb(152 255 152)" }
+        200 = @{ bg = "rgba(0, 255, 127, 0.15)"; color = "rgb(0 255 127)" }
+        300 = @{ bg = "rgba(50, 205, 50, 0.15)"; color = "rgb(50 205 50)" }
+        400 = @{ bg = "rgba(32, 178, 170, 0.15)"; color = "rgb(32 178 170)" }
+        500 = @{ bg = "rgba(0, 178, 210, 0.15)"; color = "rgb(0 178 210)" }
+        600 = @{ bg = "rgba(0, 133, 122, 0.15)"; color = "rgb(0 133 122)" }
+        700 = @{ bg = "rgba(0, 255, 0, 0.15)"; color = "rgb(0 255 0)" }
+        800 = @{ bg = "rgba(0, 92, 0, 0.15)"; color = "rgb(0 255 127)" }
+        900 = @{ bg = "rgba(0, 50, 0, 0.15)"; color = "rgb(0 255 127)" }
+    }
+
+    $delShadeColors = @{
+        100 = @{ bg = "rgba(255, 111, 156, 0.15)"; color = "rgb(255 111 156)" }
+        200 = @{ bg = "rgba(255, 75, 156, 0.15)"; color = "rgb(255 75 156)" }
+        300 = @{ bg = "rgba(255, 20, 147, 0.15)"; color = "rgb(255 20 147)" }
+        400 = @{ bg = "rgba(224, 110, 146, 0.15)"; color = "rgb(224 110 146)" }
+        500 = @{ bg = "rgba(213, 0, 109, 0.15)"; color = "rgb(213 0 109)" }
+        600 = @{ bg = "rgba(215, 61, 133, 0.15)"; color = "rgb(215 61 133)" }
+        700 = @{ bg = "rgba(192, 58, 105, 0.15)"; color = "rgb(192 58 105)" }
+        800 = @{ bg = "rgba(191, 0, 72, 0.15)"; color = "rgb(191 0 72)" }
+        900 = @{ bg = "rgba(155, 0, 67, 0.15)"; color = "rgb(255 105 180)" }
+    }
+
+    return @{
+        Add = $addShadeColors
+        Del = $delShadeColors
+    }
+}
+
+function Get-ShadeCss {
+    $shadeColors = Get-ShadeColorDefinitions
+    $css = @"
+
+        /* Shade-based colors for additions using success spectrum */
+"@
+
+    # Generate CSS for addition shades
+    foreach ($shade in $shadeColors.Add.Keys | Sort-Object) {
+        $colors = $shadeColors.Add[$shade]
+        $css += @"
+        .diff-line.diff-add.shade-$shade {
+            background: $($colors.bg);
+            color: $($colors.color);
+            border-left: 2px solid $($colors.color);
+        }
+"@
+    }
+
+    $css += @"
+
+        /* Shade-based colors for deletions using error spectrum */
+"@
+
+    # Generate CSS for deletion shades
+    foreach ($shade in $shadeColors.Del.Keys | Sort-Object) {
+        $colors = $shadeColors.Del[$shade]
+        $css += @"
+        .diff-line.diff-del.shade-$shade {
+            background: $($colors.bg);
+            color: $($colors.color);
+            border-left: 2px solid $($colors.color);
+        }
+"@
+    }
+
+    return $css
+}
+
 function Export-HtmlReport {
     param(
         [array]$Evolution,
         [string]$OutputDir
     )
-    
+
     $reportPath = Join-Path $OutputDir "evolution-report.html"
     
     $html = @"
@@ -1586,99 +1684,7 @@ function Export-HtmlReport {
             font-weight: bold;
         }
 
-        /* Shade-based colors for additions using success spectrum */
-        .diff-line.diff-add.shade-100 {
-            background: rgba(152, 255, 152, 0.15);
-            color: rgb(152 255 152);
-            border-left: 2px solid rgb(152 255 152);
-        }
-        .diff-line.diff-add.shade-200 {
-            background: rgba(0, 255, 127, 0.15); /* success-200 */
-            color: rgb(0 255 127);
-            border-left: 2px solid rgb(0 255 127);
-        }
-        .diff-line.diff-add.shade-300 {
-            background: rgba(50, 205, 50, 0.15); /* success-300 */
-            color: rgb(50 205 50);
-            border-left: 2px solid rgb(50 205 50);
-        }
-        .diff-line.diff-add.shade-400 {
-            background: rgba(32, 178, 170, 0.15); /* success-400 */
-            color: rgb(32 178 170);
-            border-left: 2px solid rgb(32 178 170);
-        }
-        .diff-line.diff-add.shade-500 {
-            background: rgba(0, 178, 210, 0.15); /* success-500 */
-            color: rgb(0 178 210);
-            border-left: 2px solid rgb(0 178 210);
-        }
-        .diff-line.diff-add.shade-600 {
-            background: rgba(0, 133, 122, 0.15); /* success-600 */
-            color: rgb(0 133 122);
-            border-left: 2px solid rgb(0 133 122);
-        }
-        .diff-line.diff-add.shade-700 {
-            background: rgba(0, 255, 0, 0.15);
-            color: rgb(0 255 0);
-            border-left: 2px solid rgb(0 255 0);
-        }
-        .diff-line.diff-add.shade-800 {
-            background: rgba(0, 92, 0, 0.15); /* success-800 */
-            color: rgb(0 92 0);
-            border-left: 2px solid rgb(0 92 0);
-        }
-        .diff-line.diff-add.shade-900 {
-            background: rgba(0, 50, 0, 0.15); /* success-900 */
-            color: rgb(0 50 0);
-            border-left: 2px solid rgb(0 50 0);
-        }
-
-        /* Shade-based colors for deletions using error spectrum */
-        .diff-line.diff-del.shade-100 {
-            background: rgba(255, 111, 156, 0.15);
-            color: rgb(255 111 156);
-            border-left: 2px solid rgb(255 111 156);
-        }
-        .diff-line.diff-del.shade-200 {
-            background: rgba(255, 75, 156, 0.15);
-            color: rgb(255 75 156);
-            border-left: 2px solid rgb(255 75 156);
-        }
-        .diff-line.diff-del.shade-300 {
-            background: rgba(255, 20, 147, 0.15);
-            color: rgb(255 20 147);
-            border-left: 2px solid rgb(255 20 147);
-        }
-        .diff-line.diff-del.shade-400 {
-            background: rgba(224, 110, 146, 0.15);
-            color: rgb(224 110 146);
-            border-left: 2px solid rgb(224 110 146);
-        }
-        .diff-line.diff-del.shade-500 {
-            background: rgba(213, 0, 109, 0.15); /* error-500 */
-            color: rgb(213 0 109);
-            border-left: 2px solid rgb(213 0 109);
-        }
-        .diff-line.diff-del.shade-600 {
-            background: rgba(215, 61, 133, 0.15);
-            color: rgb(215 61 133);
-            border-left: 2px solid rgb(215 61 133);
-        }
-        .diff-line.diff-del.shade-700 {
-            background: rgba(192, 58, 105, 0.15);
-            color: rgb(192 58 105);
-            border-left: 2px solid rgb(192 58 105);
-        }
-        .diff-line.diff-del.shade-800 {
-            background: rgba(191, 0, 72, 0.15);
-            color: rgb(191 0 72);
-            border-left: 2px solid rgb(191 0 72);
-        }
-        .diff-line.diff-del.shade-900 {
-            background: rgba(155, 0, 67, 0.15);
-            color: rgb(255 105 180);  /* Lighter for visibility */
-            border-left: 2px solid rgb(155 0 67);
-        }
+$(Get-ShadeCss)
     </style>
     <script>
         function setViewMode(btn, mode, versionId) {
@@ -1725,20 +1731,20 @@ function Export-HtmlReport {
                 }
 
                 diffContainer.classList.add('active');
-                // Add copy buttons to diff panels if not already present
-                const diffPanels = diffContainer.querySelectorAll('.diff-content');
-                diffPanels.forEach(panel => {
-                    if (!panel.querySelector('.copy-btn')) {
-                        const copyBtn = document.createElement('button');
-                        copyBtn.className = 'copy-btn';
-                        copyBtn.textContent = 'Copy';
-                        copyBtn.style.position = 'fixed';
-                        copyBtn.style.bottom = '20px';
-                        copyBtn.style.right = '20px';
-                        copyBtn.onclick = function() { copyToClipboard(panel); };
-                        panel.appendChild(copyBtn);
-                    }
-                });
+                // Add a single copy button for the unified diff if not already present
+                if (!diffContainer.querySelector('.copy-btn')) {
+                    const copyBtn = document.createElement('button');
+                    copyBtn.className = 'copy-btn';
+                    copyBtn.textContent = 'Copy Unified Diff';
+                    copyBtn.style.position = 'absolute';
+                    copyBtn.style.top = '10px';
+                    copyBtn.style.right = '10px';
+                    copyBtn.style.zIndex = '100';
+                    copyBtn.onclick = function() {
+                        copyUnifiedDiff(diffContainer, btn.getAttribute('data-current-title'), btn.getAttribute('data-prev-title'));
+                    };
+                    diffContainer.appendChild(copyBtn);
+                }
             } else if (mode === 'compressed' && compressedContent) {
                 compressedContent.classList.remove('collapsed');
                 addCopyButton(compressedContent);
@@ -1772,7 +1778,72 @@ function Export-HtmlReport {
             };
             container.appendChild(copyBtn);
         }
-        
+
+        function copyUnifiedDiff(diffContainer, currentTitle, prevTitle) {
+            const copyBtn = diffContainer.querySelector('.copy-btn');
+            const originalText = copyBtn.textContent;
+
+            // Get the left (previous) and right (current) content
+            const leftPanel = diffContainer.querySelector('.diff-left .diff-content');
+            const rightPanel = diffContainer.querySelector('.diff-side:last-child .diff-content');
+
+            if (!leftPanel || !rightPanel) return;
+
+            // Build unified diff format
+            let unifiedDiff = '--- ' + prevTitle + '\n';
+            unifiedDiff += '+++ ' + currentTitle + '\n';
+            unifiedDiff += '@@ Changes @@\n';
+
+            // Get all diff lines
+            const leftLines = leftPanel.querySelectorAll('.diff-line');
+            const rightLines = rightPanel.querySelectorAll('.diff-line');
+
+            // Process lines to create unified diff
+            leftLines.forEach((line, index) => {
+                if (line.classList.contains('diff-removed')) {
+                    const content = line.querySelector('.diff-line-content');
+                    if (content) {
+                        unifiedDiff += '-' + content.innerText + '\n';
+                    }
+                } else if (line.classList.contains('diff-modified')) {
+                    const content = line.querySelector('.diff-line-content');
+                    if (content) {
+                        unifiedDiff += '-' + content.innerText + '\n';
+                    }
+                }
+            });
+
+            rightLines.forEach((line, index) => {
+                if (line.classList.contains('diff-added')) {
+                    const content = line.querySelector('.diff-line-content');
+                    if (content) {
+                        unifiedDiff += '+' + content.innerText + '\n';
+                    }
+                } else if (line.classList.contains('diff-modified')) {
+                    const content = line.querySelector('.diff-line-content');
+                    if (content) {
+                        unifiedDiff += '+' + content.innerText + '\n';
+                    }
+                } else if (line.classList.contains('diff-unchanged')) {
+                    const content = line.querySelector('.diff-line-content');
+                    if (content) {
+                        unifiedDiff += ' ' + content.innerText + '\n';
+                    }
+                }
+            });
+
+            navigator.clipboard.writeText(unifiedDiff).then(() => {
+                copyBtn.textContent = '✓ Copied!';
+                copyBtn.classList.add('copied');
+                setTimeout(() => {
+                    copyBtn.textContent = originalText;
+                    copyBtn.classList.remove('copied');
+                }, 2000);
+            }).catch(err => {
+                console.error('Failed to copy:', err);
+            });
+        }
+
         function copyToClipboard(container) {
             // Get the text content, excluding the copy button text
             const copyBtn = container.querySelector('.copy-btn');
@@ -2040,19 +2111,33 @@ function Export-HtmlReport {
             const currentElement = document.getElementById(currentId);
             const previousElement = document.getElementById(previousId);
             const diffContainer = document.getElementById(diffContainerId);
-            
+
             if (!currentElement || !previousElement) return;
-            
+
             const currentText = currentElement.textContent;
             const previousText = previousElement.textContent;
-            
+
             const diff = computeDiff(previousText, currentText);
             const diffHtml = renderDiff(diff, previousTitle, currentTitle);
-            
+
             diffContainer.innerHTML = diffHtml;
-            
+
             // Set up scroll synchronization after the diff is rendered
             setTimeout(() => setupScrollSync(diffContainer), 50);
+        }
+
+        function showDiffFromCompressed(diffId) {
+            // Find the diff button with matching data-diff-id
+            const diffBtn = document.querySelector('[data-diff-id="' + diffId + '"]');
+            if (diffBtn) {
+                // Click the diff button to show the diff
+                diffBtn.click();
+                // Scroll to the diff container
+                const diffContainer = document.getElementById(diffId);
+                if (diffContainer) {
+                    diffContainer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            }
         }
         
         function setupScrollSync(diffContainer) {
@@ -2139,9 +2224,11 @@ function Export-HtmlReport {
 "@
 
             # Add diff button for versions that have a previous version
-            if ($versionIndex -gt 0) {
-                $prevCodeId = "code_$chainIndex`_$($versionIndex-1)"
-                $prevVersion = $chain.Versions[$versionIndex-1]
+            # Since versions are stored in descending order (newest first),
+            # the "previous" version in time is at index+1, not index-1
+            if ($versionIndex -lt $chain.Versions.Count - 1) {
+                $prevCodeId = "code_$chainIndex`_$($versionIndex+1)"
+                $prevVersion = $chain.Versions[$versionIndex+1]
                 $currentTitle = "Current ($($version.Date.ToString('MM-dd HH:mm')))"
                 $prevTitle = "Previous ($($prevVersion.Date.ToString('MM-dd HH:mm')))"
 
@@ -2155,8 +2242,8 @@ function Export-HtmlReport {
                             data-diff-id="$diffId">Diff</button>
 "@
             }
-            # Add compressed diff button for the first (most recent) version
-            elseif ($versionIndex -eq 0 -and $chain.Versions.Count -gt 1) {
+            # Add compressed diff button for the last (oldest) version
+            elseif ($versionIndex -eq $chain.Versions.Count - 1 -and $chain.Versions.Count -gt 1) {
                 $compressedDiffId = "compressed_$chainIndex"
                 $html += @"
                         <button class="toggle-btn compressed-btn" onclick="setViewMode(this, 'compressed', '$versionContainerId')">Compressed</button>
@@ -2227,19 +2314,19 @@ function Export-HtmlReport {
             $html += @"
                 <div class="code-content collapsed" id="$codeId">$escapedContent</div>
 "@
-            
-            # Add compressed diff content for the first version
-            if ($versionIndex -eq 0 -and $chain.Versions.Count -gt 1) {
+
+            # Add compressed diff content for the last (oldest) version
+            if ($versionIndex -eq $chain.Versions.Count - 1 -and $chain.Versions.Count -gt 1) {
                 $compressedDiffId = "compressed_$chainIndex"
-                $compressedDiffContent = Get-CompressedDiff -Chain $chain
+                $compressedDiffContent = Get-CompressedDiff -Chain $chain -ChainIndex $chainIndex
                 
                 $html += @"
                 <div class="code-content collapsed" id="$compressedDiffId">$compressedDiffContent</div>
 "@
             }
-            
+
             # Add diff container
-            if ($versionIndex -gt 0) {
+            if ($versionIndex -lt $chain.Versions.Count - 1) {
                 $html += @"
                 <div class="diff-container" id="$diffId"></div>
 "@

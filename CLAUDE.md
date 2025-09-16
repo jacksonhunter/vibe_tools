@@ -51,7 +51,7 @@ This allows our evolution tracker to show what actually changed in each function
 
 1. **Track-CodeEvolution.ps1** iterates through Git history for matching files
 2. For each commit, extracts file content at that point in time
-3. Passes content to **javascript-parser.js** for AST analysis using Acorn
+3. Passes content to **tree-sitter-parser.js** for AST analysis using web-tree-sitter WASM
 4. Parser returns structured segment data (classes, functions, methods, constants)
 5. PowerShell groups segments by name to create evolution chains
 6. Generates reports showing how each function/class changed over time
@@ -59,8 +59,9 @@ This allows our evolution tracker to show what actually changed in each function
 ### Key Components
 
 - **Track-CodeEvolution.ps1**: PowerShell orchestrator managing Git traversal and report generation
-- **lib/parsers/javascript-parser.js**: Acorn-based AST parser for accurate code extraction (not regex)
-- **Compressed Diff Format**: Reduces 80,000+ lines to ~5,000 by stacking commit transitions at top and showing final code once with inline historical changes
+- **lib/parsers/tree-sitter-parser.js**: Universal parser with auto language detection via WASM
+- **lib/parsers/javascript-parser.js**: Acorn-based fallback for JavaScript/TypeScript
+- **Compressed Diff Format**: Human and machine-readable format showing all changes inline with final code
 
 ### Output Formats
 
@@ -134,6 +135,32 @@ Git shows file-level diffs which can be overwhelming when tracking specific func
   - Detects constants (UPPER_CASE), global assignments (`<<-`, `assign()`)
   - Note: R AST uses `lhs`/`rhs` fields for binary operators
 
+## Installation and Usage
+
+### Using Code Evolver in Your Project (Without Adding Files)
+
+1. **Clone to a separate location** outside your project:
+   ```bash
+   git clone https://github.com/yourusername/vibe_tools.git ~/tools/vibe_tools
+   ```
+
+2. **Add to .gitignore** in your project:
+   ```
+   # Code Evolution Analysis (generated)
+   code-evolution-analysis/
+   ```
+
+3. **Run from your project root**:
+   ```powershell
+   # Windows PowerShell
+   powershell.exe -ExecutionPolicy Bypass -File "~/tools/vibe_tools/code_evolver/Track-CodeEvolution.ps1" -ClassName "YourClass" -ExportHtml
+
+   # Or create an alias in your PowerShell profile
+   Set-Alias track-evolution "~/tools/vibe_tools/code_evolver/Track-CodeEvolution.ps1"
+   ```
+
+4. **Output goes to** `./code-evolution-analysis/` which is gitignored
+
 ### Recent Updates (September 2025)
 
 #### Enhanced Commit Message Parsing (September 14, 2025)
@@ -167,6 +194,14 @@ Compressed diffs use tailwind-inspired shade variations to distinguish commits:
 - **Verbose mode improvements**: More detailed debugging output
 - **Double-spacing fix**: Removed unnecessary newlines in HTML generation
 - **R language support**: Full support for R6, S3, S4 classes and methods
+
+#### Recent Bug Fixes (September 15, 2025)
+- **Fixed diff ordering**: Diffs now show older → newer (chronological) instead of reversed
+- **Unified diff copy**: Single copy button exports proper unified diff format
+- **Shade-colored headers**: Commit headers in compressed view match their diff colors
+- **Clickable diff lines**: Click any change in compressed view to jump to its diff
+- **Centralized color definitions**: Single source of truth for shade colors
+- **Removed blank line ignoring**: Preserves accurate line numbers in compressed view
 
 ### Technical Requirements
 
