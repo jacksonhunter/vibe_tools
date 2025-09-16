@@ -127,7 +127,8 @@ param(
     [switch]$ExportUnifiedDiff,
     [switch]$ExportCompressedDiff,
     [switch]$Verbose,
-    [switch]$SimpleCommitDisplay  # Opt-out flag to disable automatic enhancement
+    [switch]$SimpleCommitDisplay,  # Opt-out flag to disable automatic enhancement
+    [switch]$NoComponentFiltering  # Disable component filtering (show all commits equally)
 )
 
 function Test-Prerequisites {
@@ -454,6 +455,37 @@ function Group-CommitMessages {
     }
 
     return $groups
+}
+
+function Filter-CommitsByComponent {
+    param(
+        [string]$ComponentName,
+        [array]$ParsedCommits
+    )
+
+    # Filter commits that specifically mention this component
+    $componentCommits = @()
+
+    foreach ($commit in $ParsedCommits) {
+        $hasComponent = $false
+
+        foreach ($component in $commit.Components) {
+            if ($component.Name -eq $ComponentName) {
+                $hasComponent = $true
+                # Add the specific component info to the commit for easy access
+                if (-not $commit.RelevantComponents) {
+                    $commit | Add-Member -MemberType NoteProperty -Name "RelevantComponents" -Value @()
+                }
+                $commit.RelevantComponents += $component
+            }
+        }
+
+        if ($hasComponent) {
+            $componentCommits += $commit
+        }
+    }
+
+    return $componentCommits
 }
 
 function Get-GitNotes {
@@ -947,9 +979,13 @@ function Build-EvolutionTimeline {
             # Always group commits - grouping logic handles all message formats
             $commitGroups = Group-CommitMessages -ParsedCommits $parsedCommits
 
+            # Filter commits that specifically mention this component
+            $componentCommits = Filter-CommitsByComponent -ComponentName $chain.Name -ParsedCommits $parsedCommits
+
             # Always add the analysis (used automatically when structured data exists)
             $chain | Add-Member -MemberType NoteProperty -Name "CommitGroups" -Value $commitGroups
             $chain | Add-Member -MemberType NoteProperty -Name "ParsedCommits" -Value $parsedCommits
+            $chain | Add-Member -MemberType NoteProperty -Name "ComponentCommits" -Value $componentCommits
 
             $chain
         }
@@ -1489,7 +1525,8 @@ function Get-ShadeCss {
 function Export-HtmlReport {
     param(
         [array]$Evolution,
-        [string]$OutputDir
+        [string]$OutputDir,
+        [bool]$NoComponentFiltering = $false
     )
 
     $reportPath = Join-Path $OutputDir "evolution-report.html"
@@ -1682,6 +1719,52 @@ function Export-HtmlReport {
         .compressed-content .diff-line:hover .line-num-unchanged {
             color: rgb(255 204 0); /* Electric yellow for line numbers on hover */
             font-weight: bold;
+        }
+
+        /* Component-specific commits styling */
+        .component-specific {
+            background: rgba(0, 255, 127, 0.1);
+            border-left: 4px solid rgb(0 255 127);
+            margin: 15px;
+            padding: 15px;
+            border-radius: 4px;
+        }
+        .component-specific h5 {
+            color: rgb(0 255 127);
+            margin: 0 0 10px 0;
+            font-size: 1.1em;
+        }
+
+        /* Custom tooltips with electric yellow theme */
+        [data-tooltip] {
+            position: relative;
+            cursor: help;
+        }
+        [data-tooltip]:hover::before {
+            content: attr(data-tooltip);
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%) translateY(-8px);
+            background: rgb(255 204 0); /* Electric yellow */
+            color: rgb(0 0 0);
+            padding: 6px 10px;
+            border-radius: 3px;
+            white-space: nowrap;
+            z-index: 1000;
+            font-size: 12px;
+            font-weight: normal;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+        [data-tooltip]:hover::after {
+            content: '';
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            border: 5px solid transparent;
+            border-top-color: rgb(255 204 0);
+            margin-bottom: -2px;
         }
 
 $(Get-ShadeCss)
@@ -2336,14 +2419,53 @@ $(Get-ShadeCss)
             $versionIndex++
         }
         
+        # Show component-specific commits first if they exist (unless filtering is disabled)
+        if (-not $NoComponentFiltering -and $chain.ComponentCommits -and $chain.ComponentCommits.Count -gt 0) {
+            $html += @"
+            <div class="component-specific" style="background: rgba(0, 255, 127, 0.1); border-left: 4px solid rgb(0 255 127); margin: 15px; padding: 15px; border-radius: 4px;">
+                <h5 style="color: rgb(0 255 127); margin: 0 0 10px 0; font-size: 1.1em;">✓ Component-Specific Changes for $($chain.Name)</h5>
+"@
+            foreach ($commit in $chain.ComponentCommits) {
+                foreach ($component in $commit.RelevantComponents) {
+                    $actionColor = switch ($component.Action) {
+                        "NEW" { "#00ff00" }
+                        "MODIFIED" { "#ffcc00" }
+                        "REMOVED" { "#ff1493" }
+                        "RENAMED" { "#00ffff" }
+                        "MOVED" { "#ff14ff" }
+                        default { "#ffffff" }
+                    }
+                    $fromNotesText = if ($component.FromNotes) { " (from git notes)" } else { "" }
+                    $html += @"
+                <div style="margin: 8px 0; padding-left: 20px;">
+                    <span style="color: $actionColor; font-weight: bold;">$($component.Action):</span>
+                    <span style="color: #ffffff;">$($component.Description)</span>
+                    <span style="color: #808080; font-size: 0.85em;">$fromNotesText</span>
+                </div>
+"@
+                }
+            }
+            $html += @"
+            </div>
+"@
+        }
+
         # Automatically show commit groups when structured commits are detected (unless SimpleCommitDisplay is set)
         if (-not $SimpleCommitDisplay -and $chain.CommitGroups -and $chain.CommitGroups.Count -gt 0) {
             # Only show groups if we have meaningful structured data
             $hasStructuredData = $chain.ParsedCommits | Where-Object { $_.IsStructured -or $_.ConventionalType -or $_.SemanticInfo.ActionType } | Select-Object -First 1
             if ($hasStructuredData) {
+
+            # Determine header text based on whether we showed component commits
+            $headerText = if (-not $NoComponentFiltering -and $chain.ComponentCommits -and $chain.ComponentCommits.Count -gt 0) {
+                "Other Commit Groups"
+            } else {
+                "Commit Groups"
+            }
+
             $html += @"
             <div class="changes-summary" style="background: #1a1a1a; border: 1px solid #00ffff; margin-top: 20px;">
-                <h4 style="color: #ff14ff;">Commit Groups</h4>
+                <h4 style="color: #ff14ff;">$headerText</h4>
 "@
             foreach ($group in $chain.CommitGroups) {
                 $groupColor = switch ($group.Type) {
@@ -2674,7 +2796,7 @@ function Main {
         # Step 5: Export if requested
         if ($ExportHtml) {
             Write-Host "`nStep 5: Exporting HTML report..." -ForegroundColor Yellow
-            Export-HtmlReport -Evolution $evolution -OutputDir $OutputDir
+            Export-HtmlReport -Evolution $evolution -OutputDir $OutputDir -NoComponentFiltering $NoComponentFiltering
         }
         
         if ($ExportUnifiedDiff) {
