@@ -13,7 +13,11 @@
       "Bash(export:*)",
       "Bash(/c/nvm4w/nodejs/npx tree-sitter generate)",
       "Bash(emcc:*)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(git notes add:*)",
+      "Bash(while IFS=' ' read -r hash rest)",
+      "Bash(git notes:*)",
+      "Read(//c/Users/jacks/experiments/VSCodeProjects/PowerAuger/**)"
     ],
     "deny": [],
     "ask": []

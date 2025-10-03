@@ -628,16 +628,32 @@ function Get-GitFileVersions {
     }
     
     if ($ClassName) {
+        # JavaScript/TypeScript/PowerShell 5+ patterns
         $searchPatterns += "class $ClassName"
         $searchPatterns += "class.*$ClassName"
+        # Python patterns
+        $searchPatterns += "class $ClassName"
+        # R patterns
+        $searchPatterns += "R6::R6Class.*$ClassName"
+        $searchPatterns += "setClass.*$ClassName"
     }
-    
+
     if ($FunctionName) {
-        # Search for function declarations and method definitions
+        # JavaScript/TypeScript patterns
         $searchPatterns += "function $FunctionName"
         $searchPatterns += "$FunctionName\s*[:=]\s*function"
         $searchPatterns += "$FunctionName\s*[:=]\s*\([^)]*\)\s*=>"
         $searchPatterns += "^\s*$FunctionName\s*\([^)]*\)\s*\{"
+        # PowerShell patterns
+        $searchPatterns += "function $FunctionName"
+        $searchPatterns += "filter $FunctionName"
+        $searchPatterns += "workflow $FunctionName"
+        # Python patterns
+        $searchPatterns += "def $FunctionName"
+        # Bash patterns
+        $searchPatterns += "$FunctionName\(\)"
+        # R patterns
+        $searchPatterns += "$FunctionName.*<-.*function"
     }
     
     if ($Globals) {
@@ -664,19 +680,26 @@ function Get-GitFileVersions {
         Write-Verbose "Normalized path: $normalizedPath"
         $relevantFiles = @($normalizedPath)
     }
-    else {
+    elseif ($searchPatterns.Count -gt 0) {
         $relevantFiles = @()
         foreach ($pattern in $searchPatterns) {
             Write-Verbose "Searching for pattern: $pattern"
-            
+
             # Get files that ever contained the pattern
-            $files = git log --all -G $pattern --name-only --pretty=format: | 
-                Where-Object { $_ -match "\.(js|jsx|ts|tsx)$" } |
+            $files = git log --all -G $pattern --name-only --pretty=format: |
+                Where-Object { $_ -match "\.(js|jsx|ts|tsx|mjs|cjs|ps1|psm1|psd1|py|pyw|sh|bash|r|R)$" } |
                 Sort-Object -Unique
-            
+
             $relevantFiles += $files
         }
         $relevantFiles = $relevantFiles | Where-Object { $_ } | Sort-Object -Unique
+    }
+    else {
+        # No specific search criteria - get all supported files from git
+        Write-Verbose "No specific search criteria provided, analyzing all supported files"
+        $relevantFiles = git ls-files |
+            Where-Object { $_ -match "\.(js|jsx|ts|tsx|mjs|cjs|ps1|psm1|psd1|py|pyw|sh|bash|r|R)$" } |
+            Sort-Object -Unique
     }
     
     if (-not $relevantFiles) {
