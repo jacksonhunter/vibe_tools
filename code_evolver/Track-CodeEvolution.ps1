@@ -162,39 +162,50 @@ function Test-Prerequisites {
     }
 
     Write-Verbose "Using parser: $Parser"
-    
-    # Check if Acorn dependencies are installed
+
+    # Check if parser dependencies are installed
     $packagePath = Join-Path $PSScriptRoot "package.json"
     if (-not (Test-Path $packagePath)) {
         Write-Host "Setting up Node.js dependencies..." -ForegroundColor Yellow
         Setup-NodeDependencies
     }
-    
+
     return $true
 }
 
 function Setup-NodeDependencies {
-    $packageJson = @{
-        name = "code-evolution-tracker"
-        version = "1.0.0"
-        description = "Node.js dependencies for code evolution tracking"
-        dependencies = @{
-            acorn = "^8.11.2"
-            "acorn-walk" = "^8.3.0"
+    # Save current directory and switch to script directory
+    $originalLocation = Get-Location
+    Set-Location $PSScriptRoot
+
+    try {
+        $packageJson = @{
+            name = "code-evolution-tracker"
+            version = "1.0.0"
+            description = "Node.js dependencies for code evolution tracking"
+            dependencies = @{
+                acorn = "^8.11.2"
+                "acorn-walk" = "^8.3.0"
+                "web-tree-sitter" = "^0.25.0"
+            }
         }
+
+        $packageJson | ConvertTo-Json | Set-Content "package.json"
+
+        Write-Host "Installing parser dependencies to $PSScriptRoot..." -ForegroundColor Yellow
+        npm install
+
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to install Node.js dependencies. Please run 'npm install acorn acorn-walk web-tree-sitter' manually in $PSScriptRoot."
+            exit 1
+        }
+
+        Write-Host "Dependencies installed successfully." -ForegroundColor Green
     }
-    
-    $packageJson | ConvertTo-Json | Set-Content "package.json"
-    
-    Write-Host "Installing Acorn dependencies..." -ForegroundColor Yellow
-    npm install
-    
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Failed to install Node.js dependencies. Please run 'npm install acorn acorn-walk' manually."
-        exit 1
+    finally {
+        # Restore original directory
+        Set-Location $originalLocation
     }
-    
-    Write-Host "Dependencies installed successfully." -ForegroundColor Green
 }
 
 function Build-ExtractionContext {
@@ -543,14 +554,16 @@ function Get-LanguageConfiguration {
             Write-Verbose "Detected language: $detectedLanguage for file $FilePath"
                 
                 # Select appropriate parser based on language
+                # All tree-sitter parsers use tree-sitter-parser.js with auto language detection
                 switch ($lang.Value.parser) {
                     "acorn" { $Parser = "javascript-parser.js" }
                     "tree-sitter-javascript" { $Parser = "tree-sitter-parser.js" }
-                    "tree-sitter-python" { $Parser = "python-parser.js" }
-                    "tree-sitter-powershell" { $Parser = "powershell-parser.js" }
-                    "tree-sitter-bash" { $Parser = "bash-parser.js" }
-                    "tree-sitter-r" { $Parser = "r-parser.js" }
-                    default { $Parser = "javascript-parser.js" }
+                    "tree-sitter-python" { $Parser = "tree-sitter-parser.js" }
+                    "tree-sitter-powershell" { $Parser = "tree-sitter-parser.js" }
+                    "tree-sitter-bash" { $Parser = "tree-sitter-parser.js" }
+                    "tree-sitter-r" { $Parser = "tree-sitter-parser.js" }
+                    "tree-sitter-csharp" { $Parser = "tree-sitter-parser.js" }
+                    default { $Parser = "tree-sitter-parser.js" }
                 }
             break
         }
@@ -558,10 +571,10 @@ function Get-LanguageConfiguration {
     }
     
     if (-not $detectedLanguage) {
-        # Default to JavaScript if unknown
-        $detectedLanguage = "javascript"
-            $Parser = "javascript-parser.js"
-        Write-Verbose "Unknown extension $extension, defaulting to JavaScript"
+        # Default to tree-sitter parser with auto-detection if unknown
+        $detectedLanguage = "unknown"
+            $Parser = "tree-sitter-parser.js"
+        Write-Verbose "Unknown extension $extension, using tree-sitter with auto-detection"
     }
     } else {
         # Try to detect language from parser name
@@ -1235,9 +1248,20 @@ function Get-CompressedDiffText {
     # Get the final version content
     $finalContent = $chronologicalVersions[-1].Content
     $finalLines = $finalContent -split "`n"
+    # Calculate the maximum line number to iterate through
+    # This includes both the final version AND all lines that ever had changes (deletions beyond final line count)
+    $maxLineNum = if ($changesByLine.Keys.Count -gt 0) {
+        $maxChangeLineNum = ($changesByLine.Keys | Measure-Object -Maximum).Maximum
+        Write-Host "DEBUG: finalLines.Count=$($finalLines.Count), maxChangeLineNum=$maxChangeLineNum, changesByLine.Keys.Count=$($changesByLine.Keys.Count)"
+        [Math]::Max($finalLines.Count, $maxChangeLineNum)
+    } else {
+        $finalLines.Count
+    }
+    Write-Host "DEBUG: Using maxLineNum=$maxLineNum"
+
 
     # Output the final content with all changes inline
-    for ($lineNum = 1; $lineNum -le $finalLines.Count; $lineNum++) {
+    for ($lineNum = 1; $lineNum -le $maxLineNum; $lineNum++) {
         # First, show any changes for this line
         if ($changesByLine.ContainsKey($lineNum)) {
             foreach ($change in $changesByLine[$lineNum]) {
@@ -1277,6 +1301,7 @@ function Get-CompressedDiff {
     $allHeaders = @()
     $changesByLine = @{}  # Hash table to store changes by line number
 
+    $maxHunkEndLine = 0  # Track maximum line number from hunk headers
     # Calculate total unique commits for shade mapping
     $totalCommits = ($chronologicalVersions | Where-Object { $_.DiffFromPrevious }).Count
 
@@ -1434,15 +1459,22 @@ function Get-CompressedDiff {
         $headerHtml += "</div>"
         $output += $headerHtml
     }
+    # Calculate the maximum line number to iterate through
+    # This includes both the final version AND all lines that ever had changes (deletions beyond final line count)
+    $maxLineNum = if ($changesByLine.Keys.Count -gt 0) {
+        $maxChangeLineNum = ($changesByLine.Keys | Measure-Object -Maximum).Maximum
+        Write-Host "DEBUG: finalLines.Count=$($finalLines.Count), maxChangeLineNum=$maxChangeLineNum, changesByLine.Keys.Count=$($changesByLine.Keys.Count)"
+        [Math]::Max($finalLines.Count, $maxChangeLineNum)
+    } else {
+        $finalLines.Count
+    }
+    Write-Host "DEBUG: Using maxLineNum=$maxLineNum"
 
-    # Get the final version content
-    $finalContent = $chronologicalVersions[-1].Content
-    $finalLines = $finalContent -split "`n"
 
     # Output the final content with all changes inline
     $output += "<div class='compressed-content' style='margin-top: 10px; padding: 10px; background: rgb(0 0 0); border: 1px solid rgb(0 63 103); border-radius: 4px;'>" <# ##NeonSurge --bg-primary --border-subtle #>
 
-    for ($lineNum = 1; $lineNum -le $finalLines.Count; $lineNum++) {
+    for ($lineNum = 1; $lineNum -le $maxLineNum; $lineNum++) {
         # First, show any changes for this line
         if ($changesByLine.ContainsKey($lineNum)) {
             foreach ($change in $changesByLine[$lineNum]) {

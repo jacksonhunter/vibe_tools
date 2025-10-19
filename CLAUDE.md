@@ -203,6 +203,14 @@ Compressed diffs use tailwind-inspired shade variations to distinguish commits:
 - **Centralized color definitions**: Single source of truth for shade colors
 - **Removed blank line ignoring**: Preserves accurate line numbers in compressed view
 
+#### Recent Bug Fixes (October 18, 2025)
+- **Fixed compressed diff truncation**: Compressed diff now shows ALL lines that ever existed, not just final version lines
+  - **Problem**: When code was reduced (e.g., 700 lines → 22 lines), compressed diff only showed lines 1-22
+  - **Root cause**: Loop iterated through `finalLines.Count` instead of maximum line number with changes
+  - **Fix**: Calculate `maxLineNum = Math.Max(finalLines.Count, maxChangeLineNum)` to iterate through all affected lines
+  - **Result**: Deleted methods at lines 23-700+ now appear in compressed diff output
+  - **Impact**: `Get-CompressedDiffText` and `Get-CompressedDiff` functions in Track-CodeEvolution.ps1:1250-1270 and 1460-1480
+
 ### Technical Requirements
 
 - **web-tree-sitter**: Version 0.25.x required (supports language version 15)
